@@ -1,0 +1,27 @@
+{
+  "name": "negoatiations-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w @negoatiations/server\" \"npm run dev -w @negoatiations/client\"",
+    "test:unit": "npm run test -w @negoatiations/server",
+    "test:ui": "npx playwright test",
+    "typecheck": "tsc --noEmit -p shared/tsconfig.json && tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p client/tsconfig.json"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/jest": "^29.5.12",
+    "concurrently": "^9.1.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "vitest": "^1.6.1"
+  }
+}
