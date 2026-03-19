@@ -23,6 +23,7 @@ export class GameScene extends Phaser.Scene {
   private auctionPanel!: Phaser.GameObjects.Container;
   private othersPanel!: Phaser.GameObjects.Container;
   private valueSheetText!: Phaser.GameObjects.Text;
+  private valueSheetContainer!: Phaser.GameObjects.Container;
   private timerText!: Phaser.GameObjects.Text;
 
   // Auction UI — DOM overlays
@@ -140,18 +141,17 @@ export class GameScene extends Phaser.Scene {
     // Right panel: Other players
     this.othersPanel = this.add.container(900, topBarHeight + 20);
 
-    // Bottom bar: Value sheet
-    const bottomBarHeight = 80;
-    this.add
-      .rectangle(0, 800 - bottomBarHeight, 1200, bottomBarHeight, 0xe0e0e0)
-      .setOrigin(0);
-
+    // Value sheet panel — right column, below the other-players list
     this.valueSheetText = this.add
-      .text(20, 800 - bottomBarHeight + 10, '', {
-        fontSize: '14px',
-        color: '#333',
+      .text(908, 456, 'Your goat values', {
+        fontSize: '11px',
+        color: '#555555',
+        fontStyle: 'italic',
       })
       .setOrigin(0);
+
+    // Container holding the 4 per-type value cards (2×2 grid)
+    this.valueSheetContainer = this.add.container(900, 474);
   }
 
   private updateUI() {
@@ -201,13 +201,8 @@ export class GameScene extends Phaser.Scene {
     // Update others panel
     this.updateOthersPanel(state, myPlayer);
 
-    // Update value sheet
-    if (this.myValueSheet) {
-      const sheetStr = Object.entries(this.myValueSheet)
-        .map(([type, val]) => `${type}: ${val}`)
-        .join(' | ');
-      this.valueSheetText.setText(`Your values: ${sheetStr}`);
-    }
+    // Update value sheet panel
+    this.updateValueSheetPanel();
   }
 
   private updateHandPanel(myPlayer: PlayerState | undefined, isMyTurn: boolean) {
@@ -218,11 +213,27 @@ export class GameScene extends Phaser.Scene {
     let y = 0;
     for (const goat of myPlayer.hand) {
       const color = GOAT_COLORS[goat.type];
-      const rect = this.add.rectangle(0, y, 120, 50, color);
-      const label = this.add.text(60, y + 25, goat.type, {
+      // Taller card (64px) when we have a value to display, 50px otherwise
+      const cardHeight = this.myValueSheet ? 64 : 50;
+      const rect = this.add.rectangle(0, y, 120, cardHeight, color);
+      const labelY = this.myValueSheet ? y + 14 : y + 25;
+      const label = this.add.text(60, labelY, goat.type, {
         fontSize: '12px',
         color: '#fff',
       }).setOrigin(0.5);
+
+      this.handContainer.add(rect);
+      this.handContainer.add(label);
+
+      if (this.myValueSheet) {
+        const val = this.myValueSheet[goat.type];
+        const valLabel = this.add.text(60, y + 40, `${val} pt${val !== 1 ? 's' : ''}`, {
+          fontSize: '11px',
+          color: '#fff',
+          fontStyle: 'bold',
+        }).setOrigin(0.5);
+        this.handContainer.add(valLabel);
+      }
 
       if (isMyTurn) {
         rect.setInteractive({ useHandCursor: true });
@@ -231,10 +242,7 @@ export class GameScene extends Phaser.Scene {
         });
       }
 
-      this.handContainer.add(rect);
-      this.handContainer.add(label);
-
-      y += 60;
+      y += this.myValueSheet ? 74 : 60;
     }
   }
 
@@ -298,6 +306,17 @@ export class GameScene extends Phaser.Scene {
 
     this.auctionPanel.add(goatRect);
     this.auctionPanel.add(goatLabel);
+
+    // Show privately what this goat is worth to the local player
+    if (this.myValueSheet) {
+      const myVal = this.myValueSheet[auction.goatOnOffer.type];
+      const worthText = this.add.text(160, 40, `Worth ${myVal} pt${myVal !== 1 ? 's' : ''} to you`, {
+        fontSize: '13px',
+        color: amAuctioneer ? '#cc8800' : '#22aa22',
+        fontStyle: 'bold',
+      }).setOrigin(0, 0.5);
+      this.auctionPanel.add(worthText);
+    }
 
     // ── Held bid slot ──────────────────────────────────────────────────────────
     let y = 100;
@@ -567,7 +586,10 @@ export class GameScene extends Phaser.Scene {
     for (const goat of myPlayer.hand) {
       const btn = document.createElement('button');
       const isSelected = this.selectedBidGoatIds.has(goat.id);
-      btn.textContent = `${goat.type}`;
+      const goatVal = this.myValueSheet ? this.myValueSheet[goat.type] : null;
+      btn.textContent = goatVal !== null
+        ? `${goat.type}  (val: ${goatVal} pt${goatVal !== 1 ? 's' : ''})`
+        : goat.type;
       btn.dataset['goatId'] = goat.id;
       btn.style.padding = '4px 10px';
       btn.style.fontSize = '12px';
@@ -623,6 +645,57 @@ export class GameScene extends Phaser.Scene {
       this.goatSelectorOverlay.remove();
       this.goatSelectorOverlay = null;
     }
+  }
+
+  private updateValueSheetPanel() {
+    this.valueSheetContainer.removeAll(true);
+
+    if (!this.myValueSheet) {
+      this.valueSheetText.setText('Your goat values (waiting for game to start…)');
+      return;
+    }
+
+    this.valueSheetText.setText('Your goat values:');
+
+    const sheet = this.myValueSheet;
+    // All four types sorted highest → lowest so the most valuable is leftmost
+    const sortedTypes = (Object.keys(sheet) as GoatType[]).sort(
+      (a, b) => sheet[b] - sheet[a]
+    );
+
+    // 2×2 grid of cards; each card is 110×52, 10px col-gap, 8px row-gap
+    const cardW = 110;
+    const cardH = 52;
+    const colGap = 10;
+    const rowGap = 8;
+
+    sortedTypes.forEach((type, i) => {
+      const val = sheet[type];
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const cx = col * (cardW + colGap) + cardW / 2;
+      const cy = row * (cardH + rowGap) + cardH / 2;
+
+      // Card background
+      const bg = this.add.rectangle(cx, cy, cardW, cardH, 0x444444).setStrokeStyle(2, 0x777777);
+
+      // Colour swatch strip at the top of the card
+      const swatch = this.add.rectangle(cx, cy - cardH / 2 + 7, cardW - 4, 14, GOAT_COLORS[type]);
+
+      const nameLabel = this.add.text(cx, cy + 4, type, {
+        fontSize: '11px',
+        color: '#ffffff',
+        fontStyle: 'bold',
+      }).setOrigin(0.5);
+
+      const valLabel = this.add.text(cx, cy + 18, `${val} pt${val !== 1 ? 's' : ''}`, {
+        fontSize: '13px',
+        color: '#ffdd44',
+        fontStyle: 'bold',
+      }).setOrigin(0.5);
+
+      this.valueSheetContainer.add([bg, swatch, nameLabel, valLabel]);
+    });
   }
 
   private updateOthersPanel(state: GameState, myPlayer: PlayerState | undefined) {
