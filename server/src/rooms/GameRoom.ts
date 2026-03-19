@@ -33,6 +33,7 @@ export class GameRoom extends Room {
       auction: null,
       turnNumber: 0,
       scores: null,
+      hostPlayerId: null,
     };
 
     this.maxClients = 5;
@@ -43,8 +44,8 @@ export class GameRoom extends Room {
       client.send('stateUpdate', this.gameState);
     });
 
-    this.onMessage('StartGame', () => {
-      this.handleStartGame();
+    this.onMessage('StartGame', (client: Client) => {
+      this.handleStartGame(client);
     });
 
     this.onMessage('PutUpForAuction', (client: Client, data: { goatId: string }) => {
@@ -96,6 +97,7 @@ export class GameRoom extends Room {
     this.gameState.players.push(newPlayer);
 
     if (this.gameState.players.length === 1) {
+      this.gameState.hostPlayerId = playerId;
       this.setMetadata({ hostName: playerName });
     }
 
@@ -114,9 +116,11 @@ export class GameRoom extends Room {
     }
   }
 
-  private handleStartGame() {
+  private handleStartGame(client: Client) {
     if (this.gameState.phase !== 'lobby') return;
     if (this.gameState.players.length < 2) return;
+    // Only the host (first player to join) may start the game
+    if (client.sessionId !== this.hostClientId) return;
 
     const hands = dealHands(this.gameState.players.length, GOATS_PER_PLAYER);
     for (let i = 0; i < this.gameState.players.length; i++) {
@@ -163,8 +167,8 @@ export class GameRoom extends Room {
       auctioneerPlayerId: playerId,
       goatOnOffer: goat,
       bids: [],
+      heldBid: null,
       status: 'open',
-      heldBidderId: null,
       timerEndsAt,
     };
 
@@ -191,7 +195,9 @@ export class GameRoom extends Room {
     const bid = data.bid;
     if (!validateBid(bid, bidder)) return;
 
-    // Replace any existing bid from this player
+    // Replace only the player's existing *open* bid (in bids[]).
+    // The held-bid slot (auction.heldBid) is completely separate — if this
+    // player's bid is currently held, they still get a fresh open-bid slot.
     this.gameState.auction.bids = this.gameState.auction.bids.filter(
       (b) => b.bidderId !== playerId
     );
@@ -208,9 +214,12 @@ export class GameRoom extends Room {
     if (!playerId) return;
     if (playerId !== this.gameState.auction.auctioneerPlayerId) return;
 
-    const bidEntry = this.gameState.auction.bids.find(
-      (b) => b.bidderId === data.bidderId
-    );
+    // The accepted bid can be either an open bid (bids[]) or the held bid
+    const bidEntry =
+      this.gameState.auction.bids.find((b) => b.bidderId === data.bidderId) ??
+      (this.gameState.auction.heldBid?.bidderId === data.bidderId
+        ? this.gameState.auction.heldBid
+        : undefined);
     if (!bidEntry) return;
 
     const auctioneerIdx = this.gameState.players.findIndex((p) => p.id === playerId);
@@ -240,12 +249,19 @@ export class GameRoom extends Room {
     if (!playerId) return;
     if (playerId !== this.gameState.auction.auctioneerPlayerId) return;
 
-    const bidExists = this.gameState.auction.bids.some(
+    // The bid to hold must be an open bid in bids[]
+    const bidIdx = this.gameState.auction.bids.findIndex(
       (b) => b.bidderId === data.bidderId
     );
-    if (!bidExists) return;
+    if (bidIdx < 0) return;
 
-    this.gameState.auction.heldBidderId = data.bidderId;
+    // If a bid is already held, drop it to free the slot — the previous
+    // holder's open-bid slot is unaffected since the two slots are separate.
+    this.gameState.auction.heldBid = null;
+
+    // Move the new bid out of bids[] into the dedicated heldBid slot
+    const [heldEntry] = this.gameState.auction.bids.splice(bidIdx, 1);
+    this.gameState.auction.heldBid = heldEntry;
     this.broadcastState();
   }
 
@@ -256,9 +272,8 @@ export class GameRoom extends Room {
     if (!playerId) return;
     if (playerId !== this.gameState.auction.auctioneerPlayerId) return;
 
-    // Cannot reject a held bid — the auctioneer is committed to it
-    if (this.gameState.auction.heldBidderId === data.bidderId) return;
-
+    // Held bids cannot be rejected — they only live in heldBid, not in bids[],
+    // so this filter only ever touches open bids anyway.
     this.gameState.auction.bids = applyRejectedBid(
       this.gameState.auction.bids,
       data.bidderId
@@ -276,11 +291,9 @@ export class GameRoom extends Room {
     // Auctioneers cannot retract (they don't bid)
     if (playerId === this.gameState.auction.auctioneerPlayerId) return;
 
+    // Only open bids (in bids[]) can be retracted — held bid cannot be retracted
     const bidEntry = this.gameState.auction.bids.find((b) => b.bidderId === playerId);
     if (!bidEntry) return;
-
-    // Cannot retract a held bid — the auctioneer has committed to it
-    if (this.gameState.auction.heldBidderId === playerId) return;
 
     // Cannot retract during the lock window
     const placedAt = bidEntry.bidPlacedAt ?? 0;
@@ -295,26 +308,24 @@ export class GameRoom extends Room {
 
     const auction = this.gameState.auction;
 
-    // If there's a held bid, auto-accept it
-    if (auction.heldBidderId) {
-      const bidEntry = auction.bids.find((b) => b.bidderId === auction.heldBidderId);
-      if (bidEntry) {
-        const auctioneerIdx = this.gameState.players.findIndex(
-          (p) => p.id === auction.auctioneerPlayerId
+    // If there's a held bid, auto-accept it on timer expiry
+    if (auction.heldBid) {
+      const bidEntry = auction.heldBid;
+      const auctioneerIdx = this.gameState.players.findIndex(
+        (p) => p.id === auction.auctioneerPlayerId
+      );
+      const bidderIdx = this.gameState.players.findIndex(
+        (p) => p.id === bidEntry.bidderId
+      );
+      if (auctioneerIdx >= 0 && bidderIdx >= 0) {
+        const [updatedAuctioneer, updatedBidder] = applyAcceptedBid(
+          this.gameState.players[auctioneerIdx],
+          this.gameState.players[bidderIdx],
+          auction.goatOnOffer,
+          bidEntry.bid
         );
-        const bidderIdx = this.gameState.players.findIndex(
-          (p) => p.id === bidEntry.bidderId
-        );
-        if (auctioneerIdx >= 0 && bidderIdx >= 0) {
-          const [updatedAuctioneer, updatedBidder] = applyAcceptedBid(
-            this.gameState.players[auctioneerIdx],
-            this.gameState.players[bidderIdx],
-            auction.goatOnOffer,
-            bidEntry.bid
-          );
-          this.gameState.players[auctioneerIdx] = updatedAuctioneer;
-          this.gameState.players[bidderIdx] = updatedBidder;
-        }
+        this.gameState.players[auctioneerIdx] = updatedAuctioneer;
+        this.gameState.players[bidderIdx] = updatedBidder;
       }
     }
     // Whether or not there was a held bid, the auction ends (no-sale if no held bid)

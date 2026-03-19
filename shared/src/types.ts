@@ -26,10 +26,10 @@ export interface BidEntry {
 export interface AuctionState {
   auctioneerPlayerId: string;
   goatOnOffer: Goat;
-  bids: BidEntry[];
+  bids: BidEntry[];           // open bids — one per player (separate from held bid)
+  heldBid: BidEntry | null;   // the auctioneer's one held-bid slot (not in bids[])
   status: 'open' | 'closed';
-  heldBidderId: string | null;     // which bid is currently marked as held
-  timerEndsAt: number | null;      // Unix timestamp (ms) when auction auto-closes
+  timerEndsAt: number | null; // Unix timestamp (ms) when auction auto-closes
 }
 
 export interface PlayerState {
@@ -49,6 +49,7 @@ export interface GameState {
   auction: AuctionState | null;
   turnNumber: number;
   scores: Record<string, number> | null;
+  hostPlayerId: string | null; // only the host may send StartGame
 }
 
 // Client → Server messages

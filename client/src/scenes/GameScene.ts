@@ -93,6 +93,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Bid retraction lock countdown — update text every frame
+    // Only tracks open bids (bids[]); held bids can never be retracted.
     if (this.lockCountdownText && this.lockCountdownText.active) {
       const auction = this.gameState?.auction;
       const myBid = auction?.bids.find((b) => b.bidderId === this.myPlayerId);
@@ -240,25 +241,35 @@ export class GameScene extends Phaser.Scene {
   private updateLobbyPanel() {
     this.auctionPanel.removeAll(true);
 
+    const isHost = this.gameState?.hostPlayerId === this.myPlayerId;
+
     const title = this.add.text(0, 0, 'Waiting for game to start...', {
       fontSize: '18px',
       color: '#666',
     });
-
-    const startBtn = this.add
-      .text(0, 50, 'Start Game', {
-        fontSize: '16px',
-        color: '#fff',
-        backgroundColor: '#667eea',
-        padding: { left: 20, right: 20, top: 10, bottom: 10 },
-      })
-      .setInteractive({ useHandCursor: true })
-      .on('pointerdown', () => {
-        this.room.send('StartGame', {});
-      });
-
     this.auctionPanel.add(title);
-    this.auctionPanel.add(startBtn);
+
+    if (isHost) {
+      const startBtn = this.add
+        .text(0, 50, 'Start Game', {
+          fontSize: '16px',
+          color: '#fff',
+          backgroundColor: '#667eea',
+          padding: { left: 20, right: 20, top: 10, bottom: 10 },
+        })
+        .setInteractive({ useHandCursor: true })
+        .on('pointerdown', () => {
+          this.room.send('StartGame', {});
+        });
+      this.auctionPanel.add(startBtn);
+    } else {
+      const waitText = this.add.text(0, 50, 'Waiting for host to start...', {
+        fontSize: '13px',
+        color: '#999',
+        fontStyle: 'italic',
+      });
+      this.auctionPanel.add(waitText);
+    }
   }
 
   private updateAuctionPanel(
@@ -288,8 +299,56 @@ export class GameScene extends Phaser.Scene {
     this.auctionPanel.add(goatRect);
     this.auctionPanel.add(goatLabel);
 
-    // Bids list
+    // ── Held bid slot ──────────────────────────────────────────────────────────
     let y = 100;
+
+    if (auction.heldBid) {
+      const heldEntry = auction.heldBid;
+      const heldBidder = state.players.find((p) => p.id === heldEntry.bidderId);
+      const heldGoatNames = heldEntry.bid.goats.map((g) => g.type).join(', ');
+      const heldDesc = heldEntry.bid.goats.length > 0
+        ? `${heldEntry.bid.cash} cash + [${heldGoatNames}]`
+        : `${heldEntry.bid.cash} cash`;
+
+      // Highlight row
+      const heldHighlight = this.add.rectangle(-4, y - 2, 500, 26, 0xfffde7).setOrigin(0);
+      this.auctionPanel.add(heldHighlight);
+
+      const heldText = this.add.text(0, y, `★ ${heldBidder?.name}: ${heldDesc}`, {
+        fontSize: '12px',
+        color: '#22aa22',
+        fontStyle: 'bold',
+      });
+      this.auctionPanel.add(heldText);
+
+      const heldBadge = this.add.text(220, y, 'HELD', {
+        fontSize: '10px',
+        color: '#fff',
+        backgroundColor: '#22aa22',
+        padding: { left: 5, right: 5, top: 2, bottom: 2 },
+      });
+      this.auctionPanel.add(heldBadge);
+
+      // Auctioneer controls for held bid: Accept only (no Hold, no Reject)
+      if (amAuctioneer) {
+        const acceptHeldBtn = this.add
+          .text(260, y, 'Accept', {
+            fontSize: '11px',
+            color: '#fff',
+            backgroundColor: '#44b944',
+            padding: { left: 8, right: 8, top: 4, bottom: 4 },
+          })
+          .setInteractive({ useHandCursor: true })
+          .on('pointerdown', () => {
+            this.room.send('AcceptBid', { bidderId: heldEntry.bidderId });
+          });
+        this.auctionPanel.add(acceptHeldBtn);
+      }
+
+      y += 34;
+    }
+
+    // ── Open bids ──────────────────────────────────────────────────────────────
     const bidsTitle = this.add.text(0, y, 'Bids:', {
       fontSize: '14px',
       color: '#333',
@@ -309,7 +368,6 @@ export class GameScene extends Phaser.Scene {
     } else {
       for (const bidEntry of auction.bids) {
         const bidder = state.players.find((p) => p.id === bidEntry.bidderId);
-        const isHeld = auction.heldBidderId === bidEntry.bidderId;
 
         // Build bid description (cash + goat types)
         const goatNames = bidEntry.bid.goats.map((g) => g.type).join(', ');
@@ -317,38 +375,13 @@ export class GameScene extends Phaser.Scene {
           ? `${bidEntry.bid.cash} cash + [${goatNames}]`
           : `${bidEntry.bid.cash} cash`;
 
-        // Held row highlight — visible to all players
-        if (isHeld) {
-          const highlight = this.add.rectangle(-4, y - 2, 500, 26, 0xfffde7).setOrigin(0);
-          this.auctionPanel.add(highlight);
-        }
-
-        // Bid text (★ prefix for held bids)
-        const heldPrefix = isHeld ? '★ ' : '';
-        const bidText = this.add.text(
-          0,
-          y,
-          `${heldPrefix}${bidder?.name}: ${bidDesc}`,
-          {
-            fontSize: '12px',
-            color: isHeld ? '#22aa22' : '#333',
-            fontStyle: isHeld ? 'bold' : 'normal',
-          }
-        );
+        const bidText = this.add.text(0, y, `${bidder?.name}: ${bidDesc}`, {
+          fontSize: '12px',
+          color: '#333',
+        });
         this.auctionPanel.add(bidText);
 
-        // "HELD" badge visible to everyone when this bid is held
-        if (isHeld) {
-          const heldBadge = this.add.text(220, y, 'HELD', {
-            fontSize: '10px',
-            color: '#fff',
-            backgroundColor: '#22aa22',
-            padding: { left: 5, right: 5, top: 2, bottom: 2 },
-          });
-          this.auctionPanel.add(heldBadge);
-        }
-
-        // Auctioneer controls: Accept / [Hold or held indicator] / Reject
+        // Auctioneer controls for open bids: Accept / Hold (if slot free) / Reject
         if (amAuctioneer) {
           const acceptBtn = this.add
             .text(260, y, 'Accept', {
@@ -361,25 +394,26 @@ export class GameScene extends Phaser.Scene {
             .on('pointerdown', () => {
               this.room.send('AcceptBid', { bidderId: bidEntry.bidderId });
             });
+          this.auctionPanel.add(acceptBtn);
 
-          // Only show Hold button when this bid is NOT already held
-          if (!isHeld) {
-            const holdBtn = this.add
-              .text(320, y, 'Hold', {
-                fontSize: '11px',
-                color: '#fff',
-                backgroundColor: '#e6a817',
-                padding: { left: 8, right: 8, top: 4, bottom: 4 },
-              })
-              .setInteractive({ useHandCursor: true })
-              .on('pointerdown', () => {
-                this.room.send('HoldBid', { bidderId: bidEntry.bidderId });
-              });
-            this.auctionPanel.add(holdBtn);
-          }
+          // Hold button — always available for open bids; if a bid is already
+          // held, holding this one will silently replace the previous held bid.
+          const holdBtn = this.add
+            .text(320, y, 'Hold', {
+              fontSize: '11px',
+              color: '#fff',
+              backgroundColor: '#e6a817',
+              padding: { left: 8, right: 8, top: 4, bottom: 4 },
+            })
+            .setInteractive({ useHandCursor: true })
+            .on('pointerdown', () => {
+              this.room.send('HoldBid', { bidderId: bidEntry.bidderId });
+            });
+          this.auctionPanel.add(holdBtn);
 
+          // Reject button — available for all open bids
           const rejectBtn = this.add
-            .text(isHeld ? 320 : 370, y, 'Reject', {
+            .text(370, y, 'Reject', {
               fontSize: '11px',
               color: '#fff',
               backgroundColor: '#cc3333',
@@ -389,13 +423,11 @@ export class GameScene extends Phaser.Scene {
             .on('pointerdown', () => {
               this.room.send('RejectBid', { bidderId: bidEntry.bidderId });
             });
-
-          this.auctionPanel.add(acceptBtn);
           this.auctionPanel.add(rejectBtn);
         }
 
-        // Retract controls — only for the local player's own bid, when not held
-        if (bidEntry.bidderId === this.myPlayerId && !isHeld) {
+        // Retract controls — only for the local player's own open bid
+        if (bidEntry.bidderId === this.myPlayerId) {
           const placedAt = bidEntry.bidPlacedAt ?? 0;
           const lockMsLeft = placedAt + BID_LOCK_SECONDS * 1000 - Date.now();
 
