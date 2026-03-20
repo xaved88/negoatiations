@@ -7,7 +7,8 @@
       "shared": ["../shared/src"],
       "shared/*": ["../shared/src/*"]
     },
-    "lib": ["ES2020", "DOM", "DOM.Iterable"]
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"]
   },
   "include": ["src/**/*", "../shared/src/**/*"],
   "exclude": ["node_modules", "dist", "tests"]
