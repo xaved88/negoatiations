@@ -450,14 +450,157 @@ This slice deliberately keeps things minimal: accept-only auctions (no hold/reje
 
 ## Slice 3: Bots Fill Empty Seats
 
-*Stub — expand before implementing.*
+**Goal:** Server-side bots auto-fill empty seats so every game has 5 participants. Bots have a pluggable strategy interface so future strategies (conservative, risky, random) can be swapped in without touching GameRoom wiring.
 
-- [ ] Bot seat architecture (server-side; bot acts like a remote player)
-- [ ] Bot bidding strategy (bid based on own value sheet)
-- [ ] Bot auction strategy (accept when offer exceeds threshold)
-- [ ] Bots auto-fill seats when < 5 humans in a room at game start
-- [ ] Unit tests for bot decision logic
-- [ ] UI test: game with 1 human + bot players completes successfully
+---
+
+### [x] Bot strategy interface + BotManager
+
+**Completed:** `server/src/bots/BotStrategy.ts` defines the `BotStrategy` interface with three decision methods (`decideAuction`, `decideBid`, `decideAccept`). Each returns a typed action object including a `delayMs` field so the caller controls all timing. `BotManager` (`server/src/bots/BotManager.ts`) manages named setTimeout handles, cancelling stale timers on reschedule and providing `cancelAll()` for room disposal.
+
+---
+
+### [x] NaiveBotStrategy implementation
+
+**Completed:** `server/src/bots/NaiveBotStrategy.ts` implements `BotStrategy` with naive but readable decision logic:
+
+- **Auctioneering:** Sells the lowest-value goat first (least regret). Delays 1–3 s.
+- **Bidding:** Bids only if profitable (goatValue > currentMaxBid + profit buffer). Uses chunked increments of 5–15 gold rounded up to nearest 5 (not "+1 forever"). Caps bids at goatValue − random buffer (3–8). Delays 1.5–5 s.
+- **Accepting:** Accepts the highest bid ≥ 70% of the goat's personal value. Considers both open and held bids. Delays 2–5 s.
+
+Pure helper functions (`randInt`, `roundUpToStep`, `currentMaxBid`, `highestBidEntry`) are exported for unit testing.
+
+---
+
+### [x] Bot seat auto-fill + GameRoom wiring
+
+**Completed:** `GameRoom.fillWithBots()` adds named bot players (Bailey, Chester, Daisy, Earl, Fern) to fill seats to MAX_PLAYERS (5) when the host starts the game. Bots receive value sheets and hands in the same deal as humans. GameRoom now calls:
+
+- `scheduleIfBotTurn()` after every `endAuction()` — triggers bot auctioneer if needed
+- `triggerBotBidders()` after every auction opens or a bid changes — each non-auctioneer bot gets a fresh, randomly-timed evaluation
+- `triggerBotAuctioneerAccept()` after any bid change — bot auctioneer re-evaluates whether to accept
+- `cancelAll()` on room dispose to prevent stale callbacks
+- Stale-state guards throughout: all execution callbacks re-validate phase/auction/player state before acting
+
+---
+
+### [x] Unit tests for bot decision logic
+
+**Completed:** `server/tests/bots.test.ts` covers:
+
+- `randInt`, `roundUpToStep`, `currentMaxBid`, `highestBidEntry` — all helper edge cases
+- `NaiveBotStrategy.decideAuction` — picks lowest-value goat, returns valid delay and id
+- `NaiveBotStrategy.decideBid` — profitable/unprofitable paths, self-outbid guard, cash cap, chunked rounding, zero-value goat
+- `NaiveBotStrategy.decideAccept` — threshold enforcement, held bid considered, highest-wins, positive delay
+- `BotManager` — scheduling, key-replacement cancellation, cancel(), cancelAll(), pendingCount
+
+---
+
+### [ ] UI test: game with 1 human + bots completes successfully
+
+**Description:** Playwright test that starts a game with a single human player (bots fill the other 4 seats) and plays until the score screen appears.
+
+**Scenario:**
+1. One browser opens the lobby, enters a name, creates a game
+2. Player starts the game immediately (bots fill remaining seats)
+3. Player bids or auctioneers for a few turns (fast-forward via TEST_MODE turn count)
+4. Game ends; score screen shows all 5 players (bots included)
+5. Player returns to lobby
+
+**Acceptance criteria:**
+- Test runs headlessly
+- Score screen shows bot names (Bailey, Chester, etc.)
+- No server errors during the bot-driven turns
+
+---
+
+## Slice 3.5: Game Balance & Bot Fixes
+
+**Goal:** Fix several issues discovered during Slice 3 testing that affect gameplay quality and bot correctness. All changes are logic/data — no new UI needed.
+
+---
+
+### [ ] Add a 5th goat type
+
+**Description:** The game currently has 4 goat types (Silly, Angry, Happy, Hungry). Add a 5th type to match the intended 5-player design where each player has a uniquely favoured type.
+
+**Changes:**
+- Add `Fluffy` (or chosen name) to `GoatType` enum in `shared/src/types.ts`
+- Update `GOAT_TYPE_COUNT` constant in `shared/src/constants.ts`
+- Update `dealHands` in `server/src/logic/dealing.ts` to distribute all 5 types
+- Update `generateValueSheets` in `server/src/logic/valueSheets.ts` to cover 5 types (see value sheet task below)
+- Update any tests that hard-code 4 goat types
+
+**Acceptance criteria:**
+- `npm run typecheck` passes
+- `npm run test:unit` passes
+- Each goat type appears in dealt hands
+
+---
+
+### [ ] Rebalance goat values to 50/40/30/20/10
+
+**Description:** Current value sheets use 1–4, which is too small — bots and players can barely make profitable bids. Switch to 50/40/30/20/10 across 5 types.
+
+**Changes:**
+- Update `generateValueSheets` in `server/src/logic/valueSheets.ts`: each player gets a permutation of `[50, 40, 30, 20, 10]` assigned across the 5 goat types
+- Ensure no two players share the same top value (see "unique top values" task below)
+- Update `NaiveBotStrategy` profit buffer and bid increment constants to be proportional to the new value scale (e.g. buffer 15–30, increments 5–25 rounded to nearest 5)
+- Update any unit tests that assert on specific value sheet numbers
+
+**Acceptance criteria:**
+- Value sheets always contain exactly the set {50, 40, 30, 20, 10} for each player
+- Bot bidding is competitive and readable at the new scale
+- `npm run test:unit` passes
+
+---
+
+### [ ] Guarantee unique favourite goat type per player
+
+**Description:** With 5 players and 5 goat types, each player should value a different type most highly. Currently `generateValueSheets` uses cyclic permutations that can assign the same top value to multiple players in some configurations.
+
+**Changes:**
+- Redesign `generateValueSheets` so the 5 permutations of `[50, 40, 30, 20, 10]` are chosen such that for each goat type, exactly one player has that type as their #1 value (i.e. the 5 permutations form a Latin square on the top position)
+- The simplest implementation: start with `[50,40,30,20,10]` and rotate by 1 for each player — `[40,30,20,10,50]`, `[30,20,10,50,40]`, etc. This guarantees all 5 types are someone's favourite and no two players share a top
+- When `playerCount < 5`, still generate valid sheets (no duplicate tops among the players present)
+
+**Acceptance criteria:**
+- No two players in the same game have the same #1 goat type
+- `generateValueSheets` unit tests assert this property
+
+---
+
+### [ ] Fix bots not bidding on human-auctioned goats
+
+**Description:** Bots are currently only triggered to bid by `triggerBotBidders()` which is called from `openAuction`. However `openAuction` is only called when a bot is the auctioneer. When a **human** calls `handlePutUpForAuction`, it calls `openAuction` internally — but the bot bid timers may be cancelled by the subsequent `handlePlaceBid` / `handleAcceptBid` calls before they fire.
+
+**Root cause:** `handlePlaceBid` calls `triggerBotBidders()` (re-schedules bots), but `handleAcceptBid` calls `endAuction()` which calls `botManager.cancelAll()`, clearing any pending bid timers before they fire. If the human accepts quickly (as in tests), bots never get a chance.
+
+**Fix:**
+- Verify that `triggerBotBidders()` IS called from `openAuction` when a human auctions (it is — but the timing is the problem)
+- The real fix is to ensure bot bid decisions are evaluated BEFORE a human can accept. Consider: only call `cancelAll()` after the auction is resolved, not before. Or: track which bots have already evaluated and don't reschedule them unnecessarily.
+- Alternatively (simpler): don't cancel bot bid timers in `cancelAll()` — instead, guard in `executeBotBid` that the auction is still open (already done) and that the bot isn't already outbid. This means bots will evaluate even after a human accepts, but the guard will return early harmlessly.
+- Recommended approach: move `botManager.cancelAll()` out of `endAuction()` and instead call it only from `onDispose()` and `handleAuctionTimeout()`. Bot bid/accept timers will naturally no-op via their existing guards when the auction is closed.
+
+**Acceptance criteria:**
+- When a human auctions a goat, bots place bids before the human accepts
+- Verified manually in dev (`npm run dev`) by observing bot bids appear in the auction panel
+
+---
+
+### [ ] Shuffle player turn order at game start
+
+**Description:** Currently players are seated in join order (first to join is always auctioneer for turn 0). Shuffling the order at game start makes games less predictable and fairer.
+
+**Changes:**
+- After `fillWithBots()` and before `dealHands()` in `handleStartGame`, shuffle `this.gameState.players` array in place (Fisher-Yates)
+- Reassign `hostPlayerId` after shuffle so it still points to the correct player object (match by id, not index)
+- `currentAuctioneerIndex` remains 0 (now points to a random player)
+
+**Acceptance criteria:**
+- Over multiple game starts, the first auctioneer is not always the first human to join
+- `hostPlayerId` still correctly identifies the original host after shuffle
+- `npm run test:unit` passes (GameRoom tests may need minor index-assumption fixes)
 
 ---
 

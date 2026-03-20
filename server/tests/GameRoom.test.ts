@@ -292,42 +292,61 @@ describe('GameRoom - auction flow', () => {
 
 describe('GameRoom - game over', () => {
   it(`ends after ${TURNS_PER_GAME} turns and broadcasts gameOver with value sheets`, () => {
-    const room = makeRoom();
-    const alice = new FakeClient('alice-session');
-    const bob = new FakeClient('bob-session');
-    joinRoom(room, alice, 'Alice');
-    joinRoom(room, bob, 'Bob');
-    sendMessage(room, alice, 'StartGame', {});
+    // Use fake timers so bot turns (which are timer-driven) execute synchronously.
+    jest.useFakeTimers();
+    try {
+      const room = makeRoom();
+      const alice = new FakeClient('alice-session');
+      const bob = new FakeClient('bob-session');
+      joinRoom(room, alice, 'Alice');
+      joinRoom(room, bob, 'Bob');
+      sendMessage(room, alice, 'StartGame', {});
 
-    const aliceId = 'alice-session';
-    const bobId = 'bob-session';
+      const aliceId = 'alice-session';
+      const bobId = 'bob-session';
 
-    // Play through all turns: alternate auctioneers, always bid $1
-    for (let turn = 0; turn < TURNS_PER_GAME; turn++) {
-      const state = getState(room);
-      const auctioneerIdx = state.currentAuctioneerIndex;
-      const auctioneer = auctioneerIdx === 0 ? alice : bob;
-      const bidder = auctioneerIdx === 0 ? bob : alice;
-      const auctioneerId = auctioneerIdx === 0 ? aliceId : bobId;
-      const bidderId = auctioneerIdx === 0 ? bobId : aliceId;
+      // After StartGame, there are 5 players: [alice(0), bob(1), bot(2), bot(3), bot(4)].
+      // Human turns (0 = Alice, 1 = Bob) are driven manually.
+      // Bot turns (2, 3, …) are driven by advancing all fake timers.
 
-      const auctioneerPlayer = state.players.find((p) => p.id === auctioneerId)!;
-      if (auctioneerPlayer.hand.length === 0) break; // no more goats to auction
+      // Turn 0: Alice is auctioneer
+      {
+        const alicePlayer = getState(room).players.find((p) => p.id === aliceId)!;
+        sendMessage(room, alice, 'PutUpForAuction', { goatId: alicePlayer.hand[0].id });
+        sendMessage(room, bob, 'PlaceBid', { bid: { cash: 1, goats: [] } });
+        sendMessage(room, alice, 'AcceptBid', { bidderId: bobId });
+      }
 
-      const goatId = auctioneerPlayer.hand[0].id;
-      sendMessage(room, auctioneer, 'PutUpForAuction', { goatId });
-      sendMessage(room, bidder, 'PlaceBid', { bid: { cash: 1, goats: [] } });
-      sendMessage(room, auctioneer, 'AcceptBid', { bidderId });
+      // Turn 1: Bob is auctioneer
+      {
+        const bobPlayer = getState(room).players.find((p) => p.id === bobId)!;
+        sendMessage(room, bob, 'PutUpForAuction', { goatId: bobPlayer.hand[0].id });
+        sendMessage(room, alice, 'PlaceBid', { bid: { cash: 1, goats: [] } });
+        sendMessage(room, bob, 'AcceptBid', { bidderId: aliceId });
+      }
+
+      // Remaining turns (2 … TURNS_PER_GAME-1) are bot turns.
+      // Drive them by repeatedly flushing the current pending-timer layer until
+      // the game ends.  runOnlyPendingTimers() fires only the timers that exist
+      // at the moment of the call, so timer-chains don't run away; each loop
+      // iteration advances one "generation" of bot actions.
+      let safetyLimit = 200;
+      while (getState(room).phase === 'playing' && safetyLimit-- > 0) {
+        jest.runOnlyPendingTimers();
+      }
+      expect(safetyLimit).toBeGreaterThan(0); // guard against broken loops
+
+      const finalState = getState(room);
+      expect(finalState.phase).toBe('ended');
+      expect(finalState.scores).not.toBeNull();
+
+      // Both human players should have received a gameOver event
+      const aliceGameOver = alice.messages.find((m) => m.type === 'gameOver')?.data as Record<string, unknown>;
+      expect(aliceGameOver).toBeDefined();
+      expect(aliceGameOver['valueSheets']).toBeDefined();
+      expect(aliceGameOver['scores']).toBeDefined();
+    } finally {
+      jest.useRealTimers();
     }
-
-    const finalState = getState(room);
-    expect(finalState.phase).toBe('ended');
-    expect(finalState.scores).not.toBeNull();
-
-    // Both players should have received a gameOver event
-    const aliceGameOver = alice.messages.find((m) => m.type === 'gameOver')?.data as Record<string, unknown>;
-    expect(aliceGameOver).toBeDefined();
-    expect(aliceGameOver['valueSheets']).toBeDefined();
-    expect(aliceGameOver['scores']).toBeDefined();
   });
 });
