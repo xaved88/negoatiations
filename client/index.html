@@ -4,174 +4,220 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Negoatiations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=block" rel="stylesheet" />
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
+    :root {
+      --farm-green:      #3a5f28;
+      --farm-green-mid:  #4d7a35;
+      --farm-green-lt:   #6a9e50;
+      --parchment:       #f7e8c8;
+      --parchment-dark:  #e8d0a0;
+      --wood-dark:       #4a2e0a;
+      --wood-mid:        #7a4f1e;
+      --gold:            #c89b2a;
+      --text-dark:       #2d1b0e;
+      --text-mid:        #6b4226;
+      --red-action:      #c0392b;
+      --green-action:    #1a7a38;
     }
 
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
     body {
-      font-family: Arial, sans-serif;
-      background: #f0f0f0;
+      font-family: 'Nunito', Arial, sans-serif;
+      background: var(--farm-green);
       overflow: hidden;
     }
 
+    /* ── Lobby ─────────────────────────────────────────── */
     #lobby {
       display: flex;
       justify-content: center;
       align-items: center;
       width: 100vw;
       height: 100vh;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background:
+        radial-gradient(ellipse at 30% 70%, #2a4a1a 0%, transparent 55%),
+        radial-gradient(ellipse at 70% 30%, #5a8040 0%, transparent 55%),
+        linear-gradient(160deg, #3a5f28 0%, #2a4a1a 100%);
     }
 
-    .lobby-container {
-      background: white;
-      border-radius: 16px;
-      padding: 40px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-      max-width: 600px;
+    .lobby-card {
+      background: var(--parchment);
+      border-radius: 20px;
+      padding: 44px 40px 36px;
+      box-shadow:
+        0 2px 0 var(--parchment-dark),
+        0 6px 32px rgba(0,0,0,0.45),
+        inset 0 1px 0 rgba(255,255,255,0.6);
+      max-width: 540px;
       width: 100%;
+      border: 2px solid var(--wood-mid);
     }
 
-    .lobby-container h1 {
+    .lobby-title {
       text-align: center;
-      margin-bottom: 30px;
-      color: #333;
-      font-size: 32px;
+      margin-bottom: 32px;
+      color: var(--wood-dark);
+      font-size: 36px;
+      font-weight: 900;
+      letter-spacing: -0.5px;
+      line-height: 1.1;
+    }
+
+    .lobby-title .goat-icon {
+      display: block;
+      font-size: 52px;
+      margin-bottom: 8px;
     }
 
     .lobby-section {
-      margin-bottom: 30px;
+      margin-bottom: 28px;
     }
 
     .lobby-section h2 {
-      font-size: 18px;
-      color: #555;
-      margin-bottom: 15px;
-      border-bottom: 2px solid #667eea;
-      padding-bottom: 10px;
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--text-mid);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--parchment-dark);
+    }
+
+    .name-row {
+      display: flex;
+      gap: 10px;
     }
 
     input[type="text"] {
-      width: 100%;
-      padding: 12px;
-      margin-bottom: 15px;
-      border: 2px solid #ddd;
-      border-radius: 8px;
+      flex: 1;
+      padding: 12px 14px;
+      border: 2px solid var(--parchment-dark);
+      border-radius: 10px;
       font-size: 16px;
+      font-family: 'Nunito', Arial, sans-serif;
+      font-weight: 600;
+      background: white;
+      color: var(--text-dark);
+      transition: border-color 0.2s;
     }
 
     input[type="text"]:focus {
       outline: none;
-      border-color: #667eea;
+      border-color: var(--farm-green-mid);
     }
 
-    button {
-      width: 100%;
-      padding: 12px;
-      background: #667eea;
+    input[type="text"]::placeholder {
+      color: #b8a080;
+      font-weight: 400;
+    }
+
+    .btn-primary {
+      padding: 12px 22px;
+      background: var(--farm-green-mid);
       color: white;
       border: none;
-      border-radius: 8px;
-      font-size: 16px;
-      font-weight: bold;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 800;
+      font-family: 'Nunito', Arial, sans-serif;
       cursor: pointer;
-      transition: background 0.3s;
+      transition: background 0.2s, transform 0.1s;
+      white-space: nowrap;
+      box-shadow: 0 3px 0 var(--farm-green);
     }
 
-    button:hover {
-      background: #5568d3;
-    }
-
-    button:active {
-      transform: scale(0.98);
-    }
+    .btn-primary:hover  { background: var(--farm-green-lt); }
+    .btn-primary:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--farm-green); }
 
     .rooms-list {
-      max-height: 300px;
+      max-height: 260px;
       overflow-y: auto;
-      border: 1px solid #ddd;
-      border-radius: 8px;
+      border: 2px solid var(--parchment-dark);
+      border-radius: 12px;
+      background: white;
     }
 
     .room-item {
-      padding: 15px;
-      border-bottom: 1px solid #eee;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--parchment-dark);
       cursor: pointer;
-      transition: background 0.2s;
+      transition: background 0.15s;
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
 
-    .room-item:hover {
-      background: #f5f5f5;
-    }
-
-    .room-item:last-child {
-      border-bottom: none;
-    }
-
-    .room-info {
-      flex: 1;
-    }
+    .room-item:hover { background: #fdf5e5; }
+    .room-item:last-child { border-bottom: none; }
 
     .room-name {
-      font-weight: bold;
-      color: #333;
+      font-weight: 700;
+      color: var(--text-dark);
+      font-size: 15px;
     }
 
-    .room-players {
-      font-size: 14px;
-      color: #888;
-      margin-top: 5px;
+    .room-sub {
+      font-size: 13px;
+      color: var(--text-mid);
+      margin-top: 2px;
     }
 
     .player-count {
-      background: #667eea;
-      color: white;
+      background: var(--wood-dark);
+      color: var(--parchment);
       padding: 4px 12px;
       border-radius: 20px;
-      font-size: 14px;
-      font-weight: bold;
+      font-size: 13px;
+      font-weight: 700;
     }
 
+    .list-placeholder {
+      text-align: center;
+      padding: 28px 20px;
+      color: var(--text-mid);
+      font-size: 14px;
+      font-style: italic;
+    }
+
+    /* ── Game canvas container ──────────────────────────── */
     #game-container {
       display: none;
       width: 100vw;
       height: 100vh;
+      background: var(--wood-dark);
     }
 
-    .loading {
-      text-align: center;
-      padding: 20px;
-      color: #666;
-    }
-
-    .no-rooms {
-      text-align: center;
-      padding: 30px;
-      color: #999;
-      font-style: italic;
+    #game-container canvas {
+      display: block;
+      margin: 0 auto;
     }
   </style>
 </head>
 <body>
   <div id="lobby">
-    <div class="lobby-container">
-      <h1>🐐 Negoatiations</h1>
+    <div class="lobby-card">
+      <h1 class="lobby-title">
+        <span class="goat-icon">🐐</span>
+        Negoatiations
+      </h1>
 
       <div class="lobby-section">
-        <input type="text" id="player-name" placeholder="Enter your name..." />
-        <button id="create-game-btn">Create Game</button>
+        <h2>Your Name</h2>
+        <div class="name-row">
+          <input type="text" id="player-name" placeholder="Enter your name…" autocomplete="off" />
+          <button class="btn-primary" id="create-game-btn">Create Game</button>
+        </div>
       </div>
 
       <div class="lobby-section">
         <h2>Join a Game</h2>
         <div class="rooms-list" id="rooms-list">
-          <div class="loading">Loading rooms...</div>
+          <div class="list-placeholder">Loading games…</div>
         </div>
       </div>
     </div>

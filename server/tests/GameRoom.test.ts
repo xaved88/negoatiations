@@ -129,13 +129,14 @@ describe('GameRoom - setup', () => {
     expect(colyseusState).toBeUndefined();
   });
 
-  it('refuses to start with fewer than 2 players', () => {
+  it('allows single-player start (solo vs bots)', () => {
     const room = makeRoom();
     const alice = new FakeClient('alice-session');
     joinRoom(room, alice, 'Alice');
 
     sendMessage(room, alice, 'StartGame', {});
-    expect(getState(room).phase).toBe('lobby');
+    expect(getState(room).phase).toBe('playing'); // game starts with 1 human + 4 bots
+    expect(getState(room).players).toHaveLength(5); // filled to MAX_PLAYERS
   });
 });
 

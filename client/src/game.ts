@@ -6,9 +6,14 @@ import { ScoreScene } from './scenes/ScoreScene';
 export function startGame(room: Room): Phaser.Game {
   const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
-    width: 1200,
+    width: 1280,
     height: 800,
     parent: 'game-container',
+    backgroundColor: '#3a5f28',
+    scale: {
+      mode: Phaser.Scale.FIT,
+      autoCenter: Phaser.Scale.CENTER_BOTH,
+    },
     scene: [
       new GameScene(room),
       new ScoreScene(),
@@ -19,6 +24,5 @@ export function startGame(room: Room): Phaser.Game {
     },
   };
 
-  const game = new Phaser.Game(config);
-  return game;
+  return new Phaser.Game(config);
 }

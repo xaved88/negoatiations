@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 115">
+  <!-- Floppy ears -->
+  <ellipse cx="17" cy="50" rx="11" ry="20" fill="#D9A400" transform="rotate(-25 17 50)"/>
+  <ellipse cx="17" cy="50" rx="7" ry="13" fill="#FDEAA0" transform="rotate(-25 17 50)"/>
+  <ellipse cx="83" cy="50" rx="11" ry="20" fill="#D9A400" transform="rotate(25 83 50)"/>
+  <ellipse cx="83" cy="50" rx="7" ry="13" fill="#FDEAA0" transform="rotate(25 83 50)"/>
+  <!-- Head -->
+  <ellipse cx="50" cy="65" rx="34" ry="36" fill="#FFFAEE" stroke="#EED090" stroke-width="1.2"/>
+  <!-- Messy hair tufts -->
+  <ellipse cx="41" cy="31" rx="8" ry="12" fill="#E8A800" transform="rotate(-18 41 31)"/>
+  <ellipse cx="50" cy="29" rx="9" ry="12" fill="#F5B800"/>
+  <ellipse cx="59" cy="31" rx="8" ry="12" fill="#E8A800" transform="rotate(18 59 31)"/>
+  <!-- Eyes — left is slightly bigger (silly asymmetry) -->
+  <circle cx="37" cy="58" r="10" fill="white" stroke="#E8D880" stroke-width="0.8"/>
+  <circle cx="63" cy="58" r="8.5" fill="white" stroke="#E8D880" stroke-width="0.8"/>
+  <!-- Iris -->
+  <circle cx="37" cy="58" r="6.5" fill="#7A5010"/>
+  <circle cx="63" cy="58" r="5.5" fill="#7A5010"/>
+  <!-- Pupils — horizontal slit, slightly cross-eyed (looking inward) -->
+  <ellipse cx="39" cy="58" rx="3.8" ry="2.2" fill="#180E00"/>
+  <ellipse cx="61" cy="58" rx="3.8" ry="2.2" fill="#180E00"/>
+  <!-- Eye shine -->
+  <circle cx="41" cy="55.5" r="2" fill="white"/>
+  <circle cx="63" cy="55.5" r="1.7" fill="white"/>
+  <!-- Muzzle -->
+  <ellipse cx="50" cy="77" rx="14" ry="10" fill="#FDEAA0" stroke="#EED090" stroke-width="0.8"/>
+  <!-- Nostrils -->
+  <ellipse cx="46" cy="76" rx="2.6" ry="2" fill="#C8A0A0" opacity="0.9"/>
+  <ellipse cx="54" cy="76" rx="2.6" ry="2" fill="#C8A0A0" opacity="0.9"/>
+  <!-- Big goofy grin -->
+  <path d="M 35 83 Q 43 92 50 92 Q 57 92 65 83" stroke="#7a4a1a" stroke-width="2.5" fill="#FF8899" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Tongue sticking out -->
+  <ellipse cx="50" cy="93.5" rx="6.5" ry="5" fill="#FF5577"/>
+  <line x1="50" y1="90" x2="50" y2="98" stroke="#DD3355" stroke-width="1" opacity="0.5"/>
+  <!-- Yellow cheek blush -->
+  <circle cx="26" cy="69" r="8" fill="#F5B800" opacity="0.18"/>
+  <circle cx="74" cy="69" r="8" fill="#F5B800" opacity="0.18"/>
+  <!-- Chin tuft -->
+  <ellipse cx="50" cy="103" rx="9" ry="7" fill="#D9A400" opacity="0.85"/>
+</svg>

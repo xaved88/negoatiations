@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 115">
+  <!-- Ears — slightly forward, alert/interested -->
+  <ellipse cx="19" cy="42" rx="10" ry="18" fill="#1878B8" transform="rotate(-6 19 42)"/>
+  <ellipse cx="19" cy="42" rx="6" ry="11" fill="#B8E0F8" transform="rotate(-6 19 42)"/>
+  <ellipse cx="81" cy="42" rx="10" ry="18" fill="#1878B8" transform="rotate(6 81 42)"/>
+  <ellipse cx="81" cy="42" rx="6" ry="11" fill="#B8E0F8" transform="rotate(6 81 42)"/>
+  <!-- Head -->
+  <ellipse cx="50" cy="65" rx="34" ry="36" fill="#F5FAFF" stroke="#B8D8F0" stroke-width="1.2"/>
+  <!-- Hair tuft — simple round -->
+  <ellipse cx="50" cy="31" rx="12" ry="11" fill="#2090D0"/>
+  <!-- Eyebrows — raised/arched in eager anticipation -->
+  <path d="M 26 47 Q 32 42 39 46" stroke="#1a2840" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M 74 47 Q 68 42 61 46" stroke="#1a2840" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Eyes — wide open, looking slightly up (at food!) -->
+  <circle cx="37" cy="56" r="11" fill="white" stroke="#B8D8F0" stroke-width="0.5"/>
+  <circle cx="63" cy="56" r="11" fill="white" stroke="#B8D8F0" stroke-width="0.5"/>
+  <!-- Iris — deep blue -->
+  <circle cx="37" cy="55" r="7" fill="#1060A8"/>
+  <circle cx="63" cy="55" r="7" fill="#1060A8"/>
+  <!-- Pupils — looking up slightly -->
+  <ellipse cx="37" cy="54" rx="4" ry="2.8" fill="#080818"/>
+  <ellipse cx="63" cy="54" rx="4" ry="2.8" fill="#080818"/>
+  <!-- Big enthusiastic shine -->
+  <circle cx="40.5" cy="50.5" r="2.8" fill="white"/>
+  <circle cx="66.5" cy="50.5" r="2.8" fill="white"/>
+  <circle cx="35" cy="56" r="1.2" fill="white"/>
+  <circle cx="61" cy="56" r="1.2" fill="white"/>
+  <!-- Muzzle -->
+  <ellipse cx="50" cy="76" rx="13" ry="9.5" fill="#B8E0F8" stroke="#90C8E8" stroke-width="0.8"/>
+  <!-- Nostrils -->
+  <ellipse cx="46" cy="75.5" rx="2.5" ry="2" fill="#5080A8" opacity="0.8"/>
+  <ellipse cx="54" cy="75.5" rx="2.5" ry="2" fill="#5080A8" opacity="0.8"/>
+  <!-- Open eager mouth -->
+  <path d="M 36 82.5 Q 44 91 50 91 Q 56 91 64 82.5" stroke="#1060A8" stroke-width="2.5" fill="#88C8E8" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Licking tongue -->
+  <ellipse cx="50" cy="92.5" rx="8" ry="5.5" fill="#4090D8"/>
+  <line x1="50" y1="89" x2="50" y2="98" stroke="#2070B8" stroke-width="1" opacity="0.5"/>
+  <!-- Drool drop off to one side -->
+  <ellipse cx="63" cy="88" rx="2.5" ry="2" fill="#A0D0F0" opacity="0.65"/>
+  <ellipse cx="64" cy="93" rx="1.8" ry="3" fill="#A0D0F0" opacity="0.55"/>
+  <!-- Blue cheek blush -->
+  <circle cx="25" cy="68" r="8" fill="#2090D0" opacity="0.15"/>
+  <circle cx="75" cy="68" r="8" fill="#2090D0" opacity="0.15"/>
+  <!-- Chin tuft -->
+  <ellipse cx="50" cy="104" rx="9" ry="7" fill="#1878B8" opacity="0.8"/>
+</svg>

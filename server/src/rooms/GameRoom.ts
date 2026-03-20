@@ -145,7 +145,7 @@ export class GameRoom extends Room {
 
   private handleStartGame(client: Client) {
     if (this.gameState.phase !== 'lobby') return;
-    if (this.gameState.players.length < 2) return;
+    if (this.gameState.players.length < 1) return;
     // Only the host (first player to join) may start the game
     if (client.sessionId !== this.hostClientId) return;
 
@@ -454,9 +454,15 @@ export class GameRoom extends Room {
       this.gameState.phase = 'ended';
       this.gameState.scores = scores;
 
+      const playerNames: Record<string, string> = {};
+      for (const p of this.gameState.players) {
+        playerNames[p.id] = p.name;
+      }
+
       this.broadcast('gameOver', {
         scores,
         valueSheets: this.playerValueSheets,
+        playerNames,
       });
     }
 
