@@ -162,24 +162,34 @@ export class NaiveBotStrategy implements BotStrategy {
   ): AcceptAction {
     const goatValue = valueSheet[auction.goatOnOffer.type];
     const minAcceptable = Math.floor(goatValue * this.sellThreshold);
+    const rejectThreshold = Math.floor(goatValue * 0.3);
 
-    // Gather every bid (open + held) that meets our threshold
-    const candidates = [
+    // Tier 1: Accept — any bid (open or held) at or above the sell threshold.
+    // Delay until near the end of the timer to build drama.
+    const allBids = [
       ...(auction.heldBid ? [auction.heldBid] : []),
       ...auction.bids,
-    ].filter((b) => b.bid.cash >= minAcceptable);
-
-    if (candidates.length === 0) {
-      return { action: 'wait', delayMs: 0 };
+    ];
+    const acceptableBids = allBids.filter((b) => b.bid.cash >= minAcceptable);
+    if (acceptableBids.length > 0) {
+      const best = acceptableBids.reduce((a, b) => (a.bid.cash >= b.bid.cash ? a : b));
+      const timeLeft = auction.timerEndsAt !== null ? auction.timerEndsAt - Date.now() : 0;
+      const delayMs = Math.max(500, timeLeft - randInt(1_500, 3_000));
+      return { action: 'accept', bidderId: best.bidderId, delayMs };
     }
 
-    // Accept the highest offer among acceptable ones
-    const best = candidates.reduce((a, b) => (a.bid.cash >= b.bid.cash ? a : b));
+    // Tier 2 & 3: Evaluate the best open bid (held bids cannot be re-held or rejected).
+    if (auction.bids.length > 0) {
+      const bestOpen = auction.bids.reduce((a, b) => (a.bid.cash >= b.bid.cash ? a : b));
+      if (bestOpen.bid.cash >= rejectThreshold) {
+        // Mid-range bid: hold to signal interest and invite higher offers
+        return { action: 'hold', bidderId: bestOpen.bidderId, delayMs: randInt(1_000, 3_000) };
+      } else {
+        // Low-ball bid: reject to prompt better offers
+        return { action: 'reject', bidderId: bestOpen.bidderId, delayMs: randInt(1_000, 3_000) };
+      }
+    }
 
-    return {
-      action: 'accept',
-      bidderId: best.bidderId,
-      delayMs: randInt(2_000, 5_000),
-    };
+    return { action: 'wait', delayMs: 0 };
   }
 }

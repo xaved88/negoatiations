@@ -91,4 +91,7 @@ export interface StartGameMsg {
 export interface GameOverEvent {
   scores: Record<string, number>;
   valueSheets: Record<string, ValueSheet>;
+  playerNames: Record<string, string>;
+  /** Final player states (hand + cash) needed for score breakdown */
+  finalPlayers: Pick<PlayerState, 'id' | 'name' | 'hand' | 'cash'>[];
 }

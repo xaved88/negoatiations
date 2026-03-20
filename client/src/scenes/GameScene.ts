@@ -251,17 +251,33 @@ export class GameScene extends Phaser.Scene {
   private handContainer!: Phaser.GameObjects.Container;
   private auctionContainer!: Phaser.GameObjects.Container;
   private rightContainer!: Phaser.GameObjects.Container;
+  private playerCircleContainer!: Phaser.GameObjects.Container;
+
+  // Stores center position of each player node (playerId → canvas coords)
+  // Used by Task 9 for goods-transfer tween source/destination
+  public playerNodePositions: Map<string, { x: number; y: number }> = new Map();
 
   // DOM overlays for bid composition
-  private bidInputOverlay: HTMLInputElement | null = null;
   private goatSelectorOverlay: HTMLDivElement | null = null;
 
+  // Bid draft state — reset when a new auction opens
+  private bidDraft: number = 0;
+  private lastAuctionGoatId: string | null = null;
   private selectedBidGoatIds: Set<string> = new Set();
+
+  // Bid animation tracking — detects state transitions for row-level effects
+  private recentlyHeldBidderId: string | null = null;
+  private recentlyRejectedBidderIds: Set<string> = new Set();
+  private prevOpenBidderIds: Set<string> = new Set();
+  private prevHeldBidderId: string | null = null;
   private lockCountdownText: Phaser.GameObjects.Text | null = null;
   private bidLockTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // Flash overlay for visual feedback
   private flashRect!: Phaser.GameObjects.Rectangle;
+
+  // Auction result announcement overlay (Task 9)
+  private announcementContainer: Phaser.GameObjects.Container | null = null;
 
   constructor(room: Room<GameState>) {
     super('GameScene');
@@ -280,6 +296,72 @@ export class GameScene extends Phaser.Scene {
     this.myPlayerId = this.room.sessionId;
 
     this.room.onMessage('stateUpdate', (newState: GameState) => {
+      const newAuctionGoatId = newState.auction?.goatOnOffer.id ?? null;
+      if (newAuctionGoatId !== this.lastAuctionGoatId) {
+        this.bidDraft = 0;
+        this.selectedBidGoatIds.clear();
+        this.lastAuctionGoatId = newAuctionGoatId;
+        // Reset bid tracking for new auction
+        this.prevOpenBidderIds.clear();
+        this.prevHeldBidderId = null;
+      }
+
+      // Detect bid state transitions for row-level animations
+      const oldAuction = this.gameState?.auction;
+      const newAuction = newState.auction;
+      if (oldAuction && newAuction && oldAuction.goatOnOffer.id === newAuction.goatOnOffer.id) {
+        const newOpenIds = new Set(newAuction.bids.map((b) => b.bidderId));
+        const newHeldId = newAuction.heldBid?.bidderId ?? null;
+
+        // Open → held: amber highlight the held bid row
+        if (newHeldId && newHeldId !== this.prevHeldBidderId && this.prevOpenBidderIds.has(newHeldId)) {
+          this.recentlyHeldBidderId = newHeldId;
+        }
+
+        // Open → gone (not held): mark as rejected for animation
+        for (const bidderId of this.prevOpenBidderIds) {
+          if (!newOpenIds.has(bidderId) && bidderId !== newHeldId) {
+            this.recentlyRejectedBidderIds.add(bidderId);
+          }
+        }
+
+        this.prevOpenBidderIds = newOpenIds;
+        this.prevHeldBidderId = newHeldId;
+      }
+
+      // Detect auction end for winner announcement (Task 9)
+      if (oldAuction && !newAuction && newState.phase === 'playing') {
+        const goat = oldAuction.goatOnOffer;
+        const sellerPlayerId = oldAuction.auctioneerPlayerId;
+        const oldSeller = this.gameState?.players.find((p) => p.id === sellerPlayerId);
+        const newSeller = newState.players.find((p) => p.id === sellerPlayerId);
+
+        // If seller no longer has the goat, a sale occurred
+        const sellerLostGoat = oldSeller?.hand.some((g) => g.id === goat.id) &&
+          !newSeller?.hand.some((g) => g.id === goat.id);
+
+        if (sellerLostGoat) {
+          // Find the buyer (who gained the goat)
+          let buyerPlayerId: string | null = null;
+          let pricePaid = 0;
+          for (const newPlayer of newState.players) {
+            if (newPlayer.id === sellerPlayerId) continue;
+            if (newPlayer.hand.some((g) => g.id === goat.id)) {
+              buyerPlayerId = newPlayer.id;
+              const oldBuyer = this.gameState?.players.find((p) => p.id === newPlayer.id);
+              pricePaid = (oldBuyer?.cash ?? 0) - newPlayer.cash;
+              break;
+            }
+          }
+          if (buyerPlayerId) {
+            this.showAuctionResult('sale', sellerPlayerId, buyerPlayerId, goat.type, pricePaid, newState);
+          }
+        } else {
+          // No sale
+          this.showAuctionResult('nosale', sellerPlayerId, null, goat.type, 0, newState);
+        }
+      }
+
       this.gameState = newState;
       this.updateUI();
     });
@@ -307,6 +389,7 @@ export class GameScene extends Phaser.Scene {
         scores: data.scores,
         valueSheets: data.valueSheets,
         playerNames: data.playerNames ?? {},
+        finalPlayers: data.finalPlayers ?? [],
         myPlayerId: this.myPlayerId,
       });
     });
@@ -318,8 +401,11 @@ export class GameScene extends Phaser.Scene {
     (window as any).__game = {
       startGame:        () => this.room.send('StartGame', {}),
       putUpForAuction:  (goatId: string) => this.room.send('PutUpForAuction', { goatId }),
-      placeBid:         (goatId: string, cashOffer: number, giveGoatId?: string) =>
-        this.room.send('PlaceBid', { goatId, cashOffer, giveGoatId }),
+      placeBid:         (bid: { cash: number; goats: { id: string; type: string }[] }) =>
+        this.room.send('PlaceBid', { bid }),
+      acceptBid:        (bidderId: string) => this.room.send('AcceptBid', { bidderId }),
+      holdBid:          (bidderId: string) => this.room.send('HoldBid', { bidderId }),
+      rejectBid:        (bidderId: string) => this.room.send('RejectBid', { bidderId }),
       getState:         () => this.gameState,
       getSheet:         () => this.myValueSheet,
     };
@@ -346,7 +432,7 @@ export class GameScene extends Phaser.Scene {
           0,
           Math.ceil((myBid.bidPlacedAt + BID_LOCK_SECONDS * 1000 - Date.now()) / 1000)
         );
-        this.lockCountdownText.setText(`Can retract in ${lockedFor}s`);
+        this.lockCountdownText.setText(`${lockedFor}s`);
       }
     }
   }
@@ -391,9 +477,10 @@ export class GameScene extends Phaser.Scene {
     }).setOrigin(1, 0.5).setVisible(false);
 
     // Containers for dynamic content
-    this.handContainer    = this.add.container(0, 0);
-    this.auctionContainer = this.add.container(0, 0);
-    this.rightContainer   = this.add.container(0, 0);
+    this.handContainer         = this.add.container(0, 0);
+    this.auctionContainer      = this.add.container(0, 0);
+    this.rightContainer        = this.add.container(0, 0);
+    this.playerCircleContainer = this.add.container(0, 0);
 
     // Full-screen flash rect (starts invisible)
     this.flashRect = this.add.rectangle(W / 2, H / 2, W, H, 0xffffff, 0);
@@ -409,6 +496,108 @@ export class GameScene extends Phaser.Scene {
       ease: 'Power2',
       onComplete: () => this.flashRect.setAlpha(1),
     });
+  }
+
+  // ── Auction result announcement (Task 9) ──────────────────────────────
+  private showAuctionResult(
+    type: 'sale' | 'nosale',
+    sellerPlayerId: string,
+    buyerPlayerId: string | null,
+    goatType: GoatType,
+    price: number,
+    state: GameState,
+  ) {
+    // Remove any existing announcement
+    if (this.announcementContainer) {
+      this.announcementContainer.destroy();
+      this.announcementContainer = null;
+    }
+
+    const sellerName = state.players.find((p) => p.id === sellerPlayerId)?.name ?? '?';
+    const buyerName = buyerPlayerId
+      ? (state.players.find((p) => p.id === buyerPlayerId)?.name ?? '?')
+      : null;
+
+    const bannerText = type === 'sale'
+      ? `${sellerName} sold a ${goatType} Goat\nto ${buyerName} for ${price} gold!`
+      : 'No sale — goat kept!';
+
+    const BW = 460, BH = type === 'sale' ? 80 : 52;
+    const BX = W / 2, BY = H / 2 - 40;
+
+    const gfx = this.add.graphics();
+    gfx.fillStyle(C.woodDark, 0.92);
+    gfx.fillRoundedRect(-BW / 2, -BH / 2, BW, BH, 14);
+    gfx.lineStyle(3, type === 'sale' ? C.gold : C.woodMid, 0.9);
+    gfx.strokeRoundedRect(-BW / 2, -BH / 2, BW, BH, 14);
+
+    const txt = this.add.text(0, 0, bannerText, {
+      ...ts(type === 'sale' ? 16 : 14, C.textLight, 'bold'),
+      resolution: 2,
+      align: 'center',
+    }).setOrigin(0.5);
+
+    const container = this.add.container(BX, BY, [gfx, txt]);
+    container.setAlpha(0);
+    this.announcementContainer = container;
+
+    // Fade in, hold, fade out
+    this.tweens.add({
+      targets: container,
+      alpha: 1,
+      duration: 250,
+      ease: 'Power2',
+      onComplete: () => {
+        this.time.delayedCall(2000, () => {
+          this.tweens.add({
+            targets: container,
+            alpha: 0,
+            duration: 400,
+            ease: 'Power2',
+            onComplete: () => {
+              container.destroy();
+              if (this.announcementContainer === container) {
+                this.announcementContainer = null;
+              }
+            },
+          });
+        });
+      },
+    });
+
+    // Goat token tween from seller to buyer (sale only)
+    if (type === 'sale' && buyerPlayerId) {
+      const sellerPos = this.playerNodePositions.get(sellerPlayerId);
+      const buyerPos = this.playerNodePositions.get(buyerPlayerId);
+      if (sellerPos && buyerPos) {
+        const tokenGfx = this.add.graphics();
+        const tokenColor = GOAT_COLOR[goatType];
+        tokenGfx.fillStyle(tokenColor, 0.9);
+        tokenGfx.fillRoundedRect(-18, -12, 36, 24, 6);
+        tokenGfx.lineStyle(2, C.gold, 0.8);
+        tokenGfx.strokeRoundedRect(-18, -12, 36, 24, 6);
+        const tokenTxt = this.add.text(0, 0, '🐐', { fontSize: '14px', resolution: 2 }).setOrigin(0.5);
+
+        const tokenContainer = this.add.container(sellerPos.x, sellerPos.y, [tokenGfx, tokenTxt]);
+
+        this.tweens.add({
+          targets: tokenContainer,
+          x: buyerPos.x,
+          y: buyerPos.y,
+          duration: 800,
+          delay: 300,
+          ease: 'Power2.easeInOut',
+          onComplete: () => {
+            this.tweens.add({
+              targets: tokenContainer,
+              alpha: 0,
+              duration: 300,
+              onComplete: () => tokenContainer.destroy(),
+            });
+          },
+        });
+      }
+    }
   }
 
   // ── UI update (called on every state push) ─────────────────────────────
@@ -446,10 +635,15 @@ export class GameScene extends Phaser.Scene {
     } else if (state.auction && state.phase === 'playing') {
       this.buildAuctionCenter(state, isMyTurn, myPlayer);
     } else {
-      this.buildWaitingCenter();
+      this.buildWaitingCenter(isMyTurn);
     }
 
     this.buildRightPanel(state, myPlayer);
+    if (state.phase === 'playing') {
+      this.buildPlayerCircle(state, myPlayer);
+    } else {
+      this.playerCircleContainer.removeAll(true);
+    }
   }
 
   // ── Left: Your Hand ───────────────────────────────────────────────────
@@ -488,10 +682,29 @@ export class GameScene extends Phaser.Scene {
     const CARD_GAP = 8;
     let cy = panelY + 48;
 
+    const showGlow = isMyTurn && !this.gameState?.auction;
+
     for (const goat of myPlayer.hand) {
       const sublabel = this.myValueSheet
         ? `${this.myValueSheet[goat.type]} pts`
         : undefined;
+
+      if (showGlow) {
+        // Gold glow ring behind the card to indicate clickability
+        const glowGfx = this.add.graphics();
+        glowGfx.lineStyle(3, C.gold, 0.9);
+        glowGfx.strokeRoundedRect(panelX + 8, cy - 2, CARD_W + 4, CARD_H + 4, 10);
+        this.handContainer.add(glowGfx);
+        this.tweens.add({
+          targets: glowGfx,
+          alpha: { from: 0.4, to: 1.0 },
+          duration: 700,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+        });
+      }
+
       const card = drawGoatCard(this, panelX + 10, cy, goat.type, {
         label: goat.type,
         sublabel,
@@ -553,7 +766,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ── Center: No auction active ─────────────────────────────────────────
-  private buildWaitingCenter() {
+  private buildWaitingCenter(isMyTurn: boolean = false) {
     this.auctionContainer.removeAll(true);
     this.hideBidComposerOverlays();
     this.timerText.setVisible(false);
@@ -566,10 +779,44 @@ export class GameScene extends Phaser.Scene {
     const lbl = this.add.text(px + pw / 2, py + 19, 'AUCTION BLOCK', {
       ...ts(12, C.textLight, 'bold'), resolution: 2,
     }).setOrigin(0.5);
-    const msg = this.add.text(px + pw / 2, py + ph / 2, 'Waiting for next auction…', {
-      ...ts(15, C.textMid), resolution: 2,
-    }).setOrigin(0.5);
-    this.auctionContainer.add([lbl, msg]);
+    this.auctionContainer.add(lbl);
+
+    if (isMyTurn) {
+      // Gold "Your Turn!" banner with pulse tween
+      const bannerGfx = this.add.graphics();
+      bannerGfx.fillStyle(C.gold, 0.2);
+      bannerGfx.fillRoundedRect(px + 32, py + ph / 2 - 80, pw - 64, 100, 12);
+      bannerGfx.lineStyle(3, C.gold, 0.8);
+      bannerGfx.strokeRoundedRect(px + 32, py + ph / 2 - 80, pw - 64, 100, 12);
+      this.auctionContainer.add(bannerGfx);
+
+      const yourTurnTxt = this.add.text(px + pw / 2, py + ph / 2 - 42, 'Your Turn!', {
+        ...ts(28, '#c89b2a', 'bold'), resolution: 2,
+      }).setOrigin(0.5);
+      this.auctionContainer.add(yourTurnTxt);
+
+      const subTxt = this.add.text(
+        px + pw / 2, py + ph / 2 + 2,
+        'Select a goat from your hand\nto start the auction',
+        { ...ts(13, C.textMid), resolution: 2, align: 'center' }
+      ).setOrigin(0.5);
+      this.auctionContainer.add(subTxt);
+
+      // Gentle alpha pulse on the banner graphic
+      this.tweens.add({
+        targets: bannerGfx,
+        alpha: { from: 0.6, to: 1.0 },
+        duration: 800,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+    } else {
+      const msg = this.add.text(px + pw / 2, py + ph / 2, 'Waiting for next auction…', {
+        ...ts(15, C.textMid), resolution: 2,
+      }).setOrigin(0.5);
+      this.auctionContainer.add(msg);
+    }
   }
 
   // ── Center: Active auction ─────────────────────────────────────────────
@@ -619,141 +866,65 @@ export class GameScene extends Phaser.Scene {
     this.auctionContainer.add(offerCard);
     cy += OFFER_H + 16;
 
-    // ── Held bid ──
+    // ── Held bid (prominent center display) ──
     if (auction.heldBid) {
       const held = auction.heldBid;
       const heldBidder = state.players.find((p) => p.id === held.bidderId);
       const heldDesc = this.bidDescription(held.bid);
+      const isNewlyHeld = this.recentlyHeldBidderId === held.bidderId;
+      const HELD_H = 66;
 
       const heldGfx = this.add.graphics();
-      heldGfx.fillStyle(0x22aa55, 0.12);
-      heldGfx.fillRoundedRect(px + 12, cy, pw - 24, 40, 6);
-      heldGfx.lineStyle(2, 0x22aa55, 0.7);
-      heldGfx.strokeRoundedRect(px + 12, cy, pw - 24, 40, 6);
+      heldGfx.fillStyle(isNewlyHeld ? 0xcc8800 : 0x1a7a40, isNewlyHeld ? 0.2 : 0.13);
+      heldGfx.fillRoundedRect(px + 12, cy, pw - 24, HELD_H, 8);
+      heldGfx.lineStyle(2.5, isNewlyHeld ? 0xcc8800 : 0x22aa55, 0.9);
+      heldGfx.strokeRoundedRect(px + 12, cy, pw - 24, HELD_H, 8);
       this.auctionContainer.add(heldGfx);
 
-      const heldTxt = this.add.text(px + 22, cy + 12, `★  ${heldBidder?.name}: ${heldDesc}`, {
-        ...ts(13, '#117733', 'bold'), resolution: 2,
-      });
-      const heldBadge = this.add.text(px + pw - 30, cy + 12, 'HELD', {
-        ...ts(10, '#ffffff', 'bold'), backgroundColor: '#22aa55',
-        padding: { left: 5, right: 5, top: 2, bottom: 2 }, resolution: 2,
-      }).setOrigin(1, 0);
-      this.auctionContainer.add([heldTxt, heldBadge]);
+      if (isNewlyHeld) {
+        this.tweens.add({
+          targets: heldGfx,
+          alpha: { from: 1, to: 0.5 },
+          duration: 350,
+          yoyo: true,
+          repeat: 1,
+          ease: 'Power2',
+          onComplete: () => { this.recentlyHeldBidderId = null; },
+        });
+      }
+
+      // "HELD BID" title row
+      this.auctionContainer.add(this.add.text(px + 22, cy + 8, '⏸  HELD BID', {
+        ...ts(10, isNewlyHeld ? '#cc8800' : '#117733', 'bold'), resolution: 2,
+      }));
+
+      // Bidder name + amount
+      this.auctionContainer.add(this.add.text(px + 22, cy + 28, `from ${heldBidder?.name ?? '?'}:  ${heldDesc}`, {
+        ...ts(14, isNewlyHeld ? '#995500' : '#1a5a30', 'bold'), resolution: 2,
+      }));
 
       if (amAuctioneer) {
         const acceptBtn = makeBtn(
-          this, px + pw - 108, cy + 6, 'Accept',
+          this, px + pw - 104, cy + 20, 'Accept',
           C.greenAction,
           () => {
             playAuctionAccepted();
             this.room.send('AcceptBid', { bidderId: held.bidderId });
           },
-          { w: 80, h: 26 }
+          { w: 80, h: 28 }
         );
         this.auctionContainer.add(acceptBtn);
       }
 
-      cy += 50;
-    }
-
-    // ── Open bids ──
-    const bidsHdr = this.add.text(px + 16, cy, 'Open Bids', {
-      ...ts(13, C.textDark, 'bold'), resolution: 2,
-    });
-    this.auctionContainer.add(bidsHdr);
-    cy += 24;
-
-    if (auction.bids.length === 0) {
-      const noBids = this.add.text(px + 16, cy, 'No bids yet…', {
-        ...ts(12, C.textMid), fontStyle: 'italic', resolution: 2,
-      } as Phaser.Types.GameObjects.Text.TextStyle);
-      this.auctionContainer.add(noBids);
-      cy += 26;
-    } else {
-      for (const entry of auction.bids) {
-        const bidder = state.players.find((p) => p.id === entry.bidderId);
-        const desc = this.bidDescription(entry.bid);
-        const isMyBid = entry.bidderId === this.myPlayerId;
-
-        // Row background
-        const rowGfx = this.add.graphics();
-        rowGfx.fillStyle(isMyBid ? 0xf0e8c8 : C.parchment, 1);
-        rowGfx.fillRoundedRect(px + 12, cy, pw - 24, 32, 5);
-        rowGfx.lineStyle(1, C.parchmentDark, 1);
-        rowGfx.strokeRoundedRect(px + 12, cy, pw - 24, 32, 5);
-        this.auctionContainer.add(rowGfx);
-
-        const bidTxt = this.add.text(px + 22, cy + 8, `${bidder?.name}: ${desc}`, {
-          ...ts(12, C.textDark), resolution: 2,
-        });
-        this.auctionContainer.add(bidTxt);
-
-        let btnX = px + pw - 26;
-
-        if (amAuctioneer) {
-          const rejectBtn = makeBtn(
-            this, btnX - 64, cy + 2, 'Reject',
-            C.redAction,
-            () => {
-              playBidRejected();
-              this.room.send('RejectBid', { bidderId: entry.bidderId });
-            },
-            { w: 60, h: 26 }
-          );
-          const holdBtn = makeBtn(
-            this, btnX - 132, cy + 2, 'Hold',
-            C.amberAction,
-            () => this.room.send('HoldBid', { bidderId: entry.bidderId }),
-            { w: 60, h: 26 }
-          );
-          const acceptBtn = makeBtn(
-            this, btnX - 202, cy + 2, 'Accept',
-            C.greenAction,
-            () => {
-              playAuctionAccepted();
-              this.room.send('AcceptBid', { bidderId: entry.bidderId });
-            },
-            { w: 64, h: 26 }
-          );
-          this.auctionContainer.add([acceptBtn, holdBtn, rejectBtn]);
-        }
-
-        cy += 40;
-
-        // Retract / lock countdown for own bids
-        if (isMyBid) {
-          const placedAt = entry.bidPlacedAt ?? 0;
-          const lockMsLeft = placedAt + BID_LOCK_SECONDS * 1000 - Date.now();
-          if (lockMsLeft > 0) {
-            const cntTxt = this.add.text(px + 22, cy, `Can retract in ${Math.ceil(lockMsLeft / 1000)}s`, {
-              ...ts(11, C.textMid), fontStyle: 'italic', resolution: 2,
-            } as Phaser.Types.GameObjects.Text.TextStyle);
-            this.auctionContainer.add(cntTxt);
-            this.lockCountdownText = cntTxt;
-            if (this.bidLockTimeout === null) {
-              this.bidLockTimeout = setTimeout(() => {
-                this.bidLockTimeout = null;
-                this.updateUI();
-              }, lockMsLeft + 50);
-            }
-          } else {
-            const retractBtn = makeBtn(
-              this, px + 22, cy, 'Retract bid',
-              C.greyAction,
-              () => this.room.send('RetractBid', {}),
-              { w: 100, h: 24 }
-            );
-            this.auctionContainer.add(retractBtn);
-          }
-          cy += 32;
-        }
-      }
+      cy += HELD_H + 10;
     }
 
     // ── Bid composer (non-auctioneer) ──
     if (!amAuctioneer && myPlayer) {
+      // Start right after goat card / held bid — no artificial gap to the bottom
+      const CX = px + pw / 2;  // horizontal center of the auction panel
       cy += 8;
+
       // Divider
       const divGfx = this.add.graphics();
       divGfx.lineStyle(1, C.parchmentDark, 1);
@@ -761,122 +932,137 @@ export class GameScene extends Phaser.Scene {
       this.auctionContainer.add(divGfx);
       cy += 12;
 
-      const composerLbl = this.add.text(px + 16, cy, 'Place your bid:', {
+      const composerLbl = this.add.text(CX, cy, 'Place your bid:', {
         ...ts(13, C.textDark, 'bold'), resolution: 2,
-      });
+      }).setOrigin(0.5, 0);
       this.auctionContainer.add(composerLbl);
       cy += 26;
 
-      // Goat selector DOM overlay
-      this.updateGoatSelectorOverlay(myPlayer, cy);
+      // Goat selector DOM overlay — centered in panel
+      this.updateGoatSelectorOverlay(myPlayer, cy, CX);
       cy += myPlayer.hand.length * 34 + 8;
 
-      // Cash label
-      const cashLbl = this.add.text(px + 16, cy, 'Cash offer:', {
-        ...ts(12, C.textMid), resolution: 2,
-      });
-      this.auctionContainer.add(cashLbl);
-      cy += 26;
+      // Compute current highest bid for display and validation
+      const allBidsForComposer = [
+        ...auction.bids,
+        ...(auction.heldBid ? [auction.heldBid] : []),
+      ];
+      const currentHighCash = allBidsForComposer.reduce((max, b) => Math.max(max, b.bid.cash), 0);
+      const highEntry = allBidsForComposer.reduce<typeof allBidsForComposer[0] | null>(
+        (best, b) => (!best || b.bid.cash > best.bid.cash) ? b : best, null
+      );
+      const highBidderName = highEntry
+        ? (state.players.find((p) => p.id === highEntry.bidderId)?.name ?? '?')
+        : null;
 
-      // Cash input DOM overlay
-      if (!this.bidInputOverlay) {
-        this.bidInputOverlay = document.createElement('input');
-        this.bidInputOverlay.type = 'text';
-        this.bidInputOverlay.inputMode = 'numeric';
-        this.bidInputOverlay.placeholder = '0';
-        Object.assign(this.bidInputOverlay.style, {
-          position: 'absolute',
-          width: '110px',
-          padding: '7px 10px',
-          fontSize: '15px',
-          fontFamily: "'Nunito', Arial, sans-serif",
-          fontWeight: '700',
-          border: '2px solid #c89b2a',
-          borderRadius: '8px',
-          background: '#fffdf5',
-          color: '#2d1b0e',
-          outline: 'none',
-        });
-        document.body.appendChild(this.bidInputOverlay);
+      // Draft amount display — centered
+      const draftDisplay = this.add.text(
+        CX, cy,
+        `Your bid: ${this.bidDraft} gold`,
+        { ...ts(14, C.textDark, 'bold'), resolution: 2 }
+      ).setOrigin(0.5, 0);
+      this.auctionContainer.add(draftDisplay);
+      cy += 24;
+
+      // Current high bid info line — centered
+      const highInfoText = highBidderName
+        ? `Current high: ${currentHighCash} (${highBidderName})`
+        : 'No bids yet';
+      const highDisplay = this.add.text(CX, cy, highInfoText, {
+        ...ts(11, C.textMid), resolution: 2,
+      }).setOrigin(0.5, 0);
+      this.auctionContainer.add(highDisplay);
+      cy += 22;
+
+      // Increment / utility buttons row: +1  +5  Raise  ✕Clear — centered as a group
+      const btnH = 30;
+      const canAdd1 = this.bidDraft + 1 <= (myPlayer?.cash ?? 0);
+      const canAdd5 = this.bidDraft + 5 <= (myPlayer?.cash ?? 0);
+      // Total width: 44+8+44+8+56=160 without Clear; +8+30=198 with Clear
+      const totalBtnW = this.bidDraft > 0 ? 198 : 160;
+      const btnStartX = CX - totalBtnW / 2;
+
+      const add1Btn = makeBtn(this, btnStartX, cy, '+1', canAdd1 ? C.greyAction : 0x999999, () => {
+        if (canAdd1) { this.bidDraft += 1; this.updateUI(); }
+      }, { w: 44, h: btnH });
+      if (!canAdd1) add1Btn.setAlpha(0.45);
+      this.auctionContainer.add(add1Btn);
+
+      const add5Btn = makeBtn(this, btnStartX + 52, cy, '+5', canAdd5 ? C.greyAction : 0x999999, () => {
+        if (canAdd5) { this.bidDraft += 5; this.updateUI(); }
+      }, { w: 44, h: btnH });
+      if (!canAdd5) add5Btn.setAlpha(0.45);
+      this.auctionContainer.add(add5Btn);
+
+      const raiseAmt = Math.min(currentHighCash + 1, myPlayer?.cash ?? 0);
+      const raiseBtn = makeBtn(this, btnStartX + 104, cy, 'Raise', C.amberAction, () => {
+        this.bidDraft = raiseAmt;
+        this.updateUI();
+      }, { w: 56, h: btnH });
+      this.auctionContainer.add(raiseBtn);
+
+      if (this.bidDraft > 0) {
+        const clearBtn = makeBtn(this, btnStartX + 168, cy, '✕', C.redAction, () => {
+          this.bidDraft = 0;
+          this.updateUI();
+        }, { w: 30, h: btnH });
+        this.auctionContainer.add(clearBtn);
       }
 
-      const canvasRect = this.game.canvas.getBoundingClientRect();
-      const scaleX = canvasRect.width / W;
-      const scaleY = canvasRect.height / H;
-      this.bidInputOverlay.style.left = (canvasRect.left + (CENTER_X + 16) * scaleX) + 'px';
-      this.bidInputOverlay.style.top  = (canvasRect.top  + cy * scaleY) + 'px';
-      this.bidInputOverlay.style.width = (110 * scaleX) + 'px';
-      this.bidInputOverlay.style.display = 'block';
+      cy += btnH + 8;
 
-      cy += 46;
-
-      const bidBtn = makeBtn(
-        this, px + 16, cy, 'Place Bid', C.greenAction,
-        () => {
-          const amount = parseInt(this.bidInputOverlay?.value || '0', 10);
-          const selectedGoats = (myPlayer?.hand ?? []).filter((g) =>
-            this.selectedBidGoatIds.has(g.id)
-          );
-          const bid: Bid = { cash: isNaN(amount) ? 0 : amount, goats: selectedGoats };
-          this.room.send('PlaceBid', { bid });
-          playBidPlaced();
-          if (this.bidInputOverlay) this.bidInputOverlay.value = '';
-          this.selectedBidGoatIds.clear();
-          this.updateUI();
-        },
-        { w: 110, h: 36 }
-      );
-      this.auctionContainer.add(bidBtn);
+      // Bid (submit) button — full width, centered with equal margins
+      const cashBalance = myPlayer?.cash ?? 0;
+      const bidValid = this.bidDraft > currentHighCash && this.bidDraft <= cashBalance;
+      if (bidValid) {
+        const bidBtn = makeBtn(
+          this, px + 16, cy, `Bid ${this.bidDraft} gold`, C.greenAction,
+          () => {
+            const selectedGoats = (myPlayer?.hand ?? []).filter((g) =>
+              this.selectedBidGoatIds.has(g.id)
+            );
+            const bid: Bid = { cash: this.bidDraft, goats: selectedGoats };
+            this.room.send('PlaceBid', { bid });
+            playBidPlaced();
+            this.bidDraft = 0;
+            this.selectedBidGoatIds.clear();
+            this.updateUI();
+          },
+          { w: pw - 32, h: 36 }
+        );
+        this.auctionContainer.add(bidBtn);
+      } else {
+        const disabledGfx = this.add.graphics();
+        disabledGfx.fillStyle(C.greyAction, 0.35);
+        disabledGfx.fillRoundedRect(px + 16, cy, pw - 32, 36, 6);
+        const hint = this.bidDraft === 0
+          ? 'Use buttons above to set a bid'
+          : this.bidDraft > cashBalance
+            ? 'Not enough gold'
+            : 'Must beat current high bid';
+        const disabledTxt = this.add.text(
+          CX, cy + 18, hint,
+          { ...ts(11, '#888888'), resolution: 2 }
+        ).setOrigin(0.5);
+        this.auctionContainer.add([disabledGfx, disabledTxt]);
+      }
+      cy += 40;
     } else {
       this.hideBidComposerOverlays();
     }
   }
 
-  // ── Right: Other players + value sheet ────────────────────────────────
+  // ── Right: Value sheet ────────────────────────────────────────────────
+  // Note: PLAYERS list has been replaced by the player circle overlay.
   private buildRightPanel(state: GameState, myPlayer: PlayerState | undefined) {
     this.rightContainer.removeAll(true);
 
     const px = W - RIGHT_W + 8, py = CONTENT_Y, pw = RIGHT_W - 16, ph = CONTENT_H;
-    const OTHERS_H = Math.min(280, (state.players.length - 1) * 70 + 46);
-    const VS_H = ph - OTHERS_H - 12;
-
-    // ── Other players panel ──
-    const ogfx = this.add.graphics();
-    drawPanel(ogfx, px, py, pw, OTHERS_H, { headerH: 36, headerColor: C.woodDark });
-    const oLbl = this.add.text(px + pw / 2, py + 18, 'PLAYERS', {
-      ...ts(11, C.textLight, 'bold'), resolution: 2,
-    }).setOrigin(0.5);
-    this.rightContainer.add([ogfx, oLbl]);
-
-    let oy = py + 44;
-    const auctioneerIdx = state.currentAuctioneerIndex;
-
-    for (const player of state.players) {
-      if (player.id === this.myPlayerId) continue;
-
-      const isAuctioneer = state.players[auctioneerIdx]?.id === player.id;
-      const nameColor = isAuctioneer ? '#c89b2a' : C.textDark;
-
-      const nameTxt = this.add.text(px + 12, oy, player.name + (isAuctioneer ? ' 🔨' : ''), {
-        ...ts(13, nameColor, 'bold'), resolution: 2,
-      });
-      const statsTxt = this.add.text(px + 12, oy + 18, `🐐 ${player.hand.length}   💰 ${player.cash}`, {
-        ...ts(11, C.textMid), resolution: 2,
-      });
-      this.rightContainer.add([nameTxt, statsTxt]);
-
-      // Separator
-      const sepGfx = this.add.graphics();
-      sepGfx.lineStyle(1, C.parchmentDark, 0.8);
-      sepGfx.lineBetween(px + 10, oy + 40, px + pw - 10, oy + 40);
-      this.rightContainer.add(sepGfx);
-
-      oy += 54;
-    }
+    const VS_H = ph;
 
     // ── Value sheet panel ──
     if (this.myValueSheet && VS_H > 80) {
-      const vpy = py + OTHERS_H + 12;
+      const vpy = py;
       const vgfx = this.add.graphics();
       drawPanel(vgfx, px, vpy, pw, VS_H, { headerH: 36, headerColor: C.woodDark });
       const vLbl = this.add.text(px + pw / 2, vpy + 18, 'YOUR VALUES', {
@@ -917,6 +1103,219 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // ── Player circle overlay ─────────────────────────────────────────────
+  private buildPlayerCircle(state: GameState, myPlayer: PlayerState | undefined) {
+    this.playerCircleContainer.removeAll(true);
+    this.playerNodePositions.clear();
+
+    const players = state.players;
+    const n = players.length;
+    if (n === 0) return;
+
+    const myIdx = players.findIndex((p) => p.id === this.myPlayerId);
+    const auctioneerPlayerId = state.players[state.currentAuctioneerIndex]?.id;
+
+    // Ellipse geometry: center + radii
+    const CX = LEFT_W + CENTER_W / 2;  // horizontal center of canvas (≈ 638)
+    const CY = CONTENT_Y + CONTENT_H * 0.5; // vertical midpoint of content area
+    const RX = 350; // horizontal radius
+    const RY = 220; // vertical radius
+
+    const NODE_W = 96;
+    const NODE_H = 44;
+    const HALF_W = NODE_W / 2;
+    const HALF_H = NODE_H / 2;
+
+    for (let seat = 0; seat < n; seat++) {
+      const playerIdx = (myIdx + seat) % n;
+      const player = players[playerIdx];
+      const isMe = player.id === this.myPlayerId;
+      const isAuctioneer = player.id === auctioneerPlayerId;
+
+      // Screen clockwise from bottom: decreasing math angle
+      const screenAngle = Math.PI / 2 - seat * (2 * Math.PI / n);
+      const nx = Math.round(CX + RX * Math.cos(screenAngle));
+      const ny = Math.round(CY + RY * Math.sin(screenAngle));
+
+      this.playerNodePositions.set(player.id, { x: nx, y: ny });
+
+      // Draw node
+      const gfx = this.add.graphics();
+
+      // Auctioneer: gold glow ring; me: green border; others: parchment
+      if (isAuctioneer) {
+        gfx.fillStyle(C.gold, 0.25);
+        gfx.fillRoundedRect(-HALF_W - 3, -HALF_H - 3, NODE_W + 6, NODE_H + 6, 10);
+        gfx.lineStyle(2.5, C.gold, 1);
+        gfx.strokeRoundedRect(-HALF_W - 3, -HALF_H - 3, NODE_W + 6, NODE_H + 6, 10);
+      }
+
+      // Node background
+      const bgColor = isMe ? 0x1a5a30 : (isAuctioneer ? 0x2e1a00 : C.woodDark);
+      gfx.fillStyle(bgColor, 0.92);
+      gfx.fillRoundedRect(-HALF_W, -HALF_H, NODE_W, NODE_H, 8);
+      gfx.lineStyle(1.5, isMe ? 0x22bb55 : (isAuctioneer ? C.gold : C.woodMid), 0.9);
+      gfx.strokeRoundedRect(-HALF_W, -HALF_H, NODE_W, NODE_H, 8);
+
+      // Name text
+      const displayName = isMe ? 'You' : player.name;
+      const nameTxt = this.add.text(0, -8, displayName, {
+        ...ts(10, C.textLight, 'bold'), resolution: 2,
+      }).setOrigin(0.5);
+
+      // Stats text
+      const statsTxt = this.add.text(0, 7, `🐐${player.hand.length}  💰${player.cash}`, {
+        ...ts(10, C.textLight), resolution: 2,
+      }).setOrigin(0.5);
+
+      // Auctioneer hammer badge
+      const nodeItems: Phaser.GameObjects.GameObject[] = [gfx, nameTxt, statsTxt];
+      if (isAuctioneer) {
+        const hammerTxt = this.add.text(HALF_W - 2, -HALF_H + 2, '🔨', {
+          fontSize: '10px', resolution: 2,
+        }).setOrigin(1, 0);
+        nodeItems.push(hammerTxt);
+      }
+
+      // My own bid badge + retract below my node
+      if (isMe && state.auction) {
+        const myBid = state.auction.bids.find((b) => b.bidderId === player.id);
+        if (myBid) {
+          const BADGE_W = 112;
+          const BADGE_H = 26;
+          const badgeOffX = -BADGE_W / 2;
+          const badgeOffY = HALF_H + 6;
+
+          const badgeGfx = this.add.graphics();
+          badgeGfx.fillStyle(0x1a4080, 0.9);
+          badgeGfx.fillRoundedRect(badgeOffX, badgeOffY, BADGE_W, BADGE_H, 5);
+          const bidText = myBid.bid.goats.length > 0
+            ? `💰${myBid.bid.cash} +🐐${myBid.bid.goats.length}`
+            : `💰 ${myBid.bid.cash} gold`;
+          const badgeTxt = this.add.text(0, badgeOffY + BADGE_H / 2, bidText, {
+            ...ts(10, '#ffffff', 'bold'), resolution: 2,
+          }).setOrigin(0.5, 0.5);
+          nodeItems.push(badgeGfx, badgeTxt);
+
+          // Retract button or countdown below badge
+          const placedAt = myBid.bidPlacedAt ?? 0;
+          const lockMsLeft = placedAt + BID_LOCK_SECONDS * 1000 - Date.now();
+          const retractY = badgeOffY + BADGE_H + 4;
+          if (lockMsLeft > 0) {
+            const cntTxt = this.add.text(0, retractY, `${Math.ceil(lockMsLeft / 1000)}s`, {
+              ...ts(9, C.textMid), fontStyle: 'italic', resolution: 2,
+            } as Phaser.Types.GameObjects.Text.TextStyle).setOrigin(0.5, 0);
+            nodeItems.push(cntTxt);
+            this.lockCountdownText = cntTxt;
+            if (this.bidLockTimeout === null) {
+              this.bidLockTimeout = setTimeout(() => {
+                this.bidLockTimeout = null;
+                this.updateUI();
+              }, lockMsLeft + 50);
+            }
+          } else {
+            const retractBtn = makeBtn(this, -50, retractY, 'Retract', C.greyAction,
+              () => this.room.send('RetractBid', {}), { w: 100, h: 22 });
+            nodeItems.push(retractBtn);
+          }
+        }
+      }
+
+      // Bid badge + auctioneer action buttons below node (not for own node)
+      if (!isMe && state.auction) {
+        const iAmAuctioneer = myPlayer?.id === state.auction.auctioneerPlayerId;
+        const playerBid = state.auction.bids.find((b) => b.bidderId === player.id);
+        const isHeldPlayer = state.auction.heldBid?.bidderId === player.id;
+        const bidEntry = isHeldPlayer ? state.auction.heldBid! : (playerBid ?? null);
+
+        if (bidEntry) {
+          const BADGE_W = 112;
+          const BADGE_H = 26;
+          const badgeOffX = -BADGE_W / 2;
+          const badgeOffY = HALF_H + 6;
+
+          const badgeGfx = this.add.graphics();
+          if (isHeldPlayer) {
+            badgeGfx.fillStyle(0x22aa55, 0.9);
+            badgeGfx.fillRoundedRect(badgeOffX, badgeOffY, BADGE_W, BADGE_H, 5);
+          } else {
+            badgeGfx.fillStyle(0xf7e8c8, 0.95);
+            badgeGfx.fillRoundedRect(badgeOffX, badgeOffY, BADGE_W, BADGE_H, 5);
+            badgeGfx.lineStyle(1.5, 0xe8d0a0, 1);
+            badgeGfx.strokeRoundedRect(badgeOffX, badgeOffY, BADGE_W, BADGE_H, 5);
+          }
+
+          const bidText = bidEntry.bid.goats.length > 0
+            ? `💰${bidEntry.bid.cash} +🐐${bidEntry.bid.goats.length}`
+            : `💰 ${bidEntry.bid.cash} gold`;
+          const badgeTxt = this.add.text(0, badgeOffY + BADGE_H / 2, bidText, {
+            ...ts(10, isHeldPlayer ? '#ffffff' : C.textDark, 'bold'), resolution: 2,
+          }).setOrigin(0.5, 0.5);
+
+          nodeItems.push(badgeGfx, badgeTxt);
+
+          // Accept / Hold / Reject buttons for open bids (auctioneer only)
+          if (iAmAuctioneer && playerBid && !isHeldPlayer) {
+            const btnY = badgeOffY + BADGE_H + 4;
+            const BTN_W = 34;
+            const BTN_H = 20;
+            const BTN_GAP = 3;
+            const startX = -(BTN_W * 3 + BTN_GAP * 2) / 2;
+
+            const acceptBtn = makeBtn(this, startX, btnY, '✓', C.greenAction, () => {
+              playAuctionAccepted();
+              this.room.send('AcceptBid', { bidderId: playerBid.bidderId });
+            }, { w: BTN_W, h: BTN_H });
+            const holdBtn = makeBtn(this, startX + BTN_W + BTN_GAP, btnY, '⏸', C.amberAction, () => {
+              this.room.send('HoldBid', { bidderId: playerBid.bidderId });
+            }, { w: BTN_W, h: BTN_H });
+            const rejectBtn = makeBtn(this, startX + (BTN_W + BTN_GAP) * 2, btnY, '✕', C.redAction, () => {
+              playBidRejected();
+              this.room.send('RejectBid', { bidderId: playerBid.bidderId });
+            }, { w: BTN_W, h: BTN_H });
+
+            nodeItems.push(acceptBtn, holdBtn, rejectBtn);
+          }
+        }
+      }
+
+      const nodeContainer = this.add.container(nx, ny, nodeItems);
+      this.playerCircleContainer.add(nodeContainer);
+
+      // Red flash overlay on node when bid was just rejected
+      if (this.recentlyRejectedBidderIds.has(player.id)) {
+        const flashGfx = this.add.graphics();
+        flashGfx.fillStyle(0xcc2200, 0.5);
+        flashGfx.fillRoundedRect(nx - HALF_W - 2, ny - HALF_H - 2, NODE_W + 4, NODE_H + 4, 10);
+        this.playerCircleContainer.add(flashGfx);
+        this.tweens.add({
+          targets: flashGfx,
+          alpha: { from: 1, to: 0 },
+          duration: 500,
+          ease: 'Power2',
+          onComplete: () => {
+            this.recentlyRejectedBidderIds.delete(player.id);
+            flashGfx.destroy();
+          },
+        });
+      }
+
+      // Auctioneer glow pulse tween
+      if (isAuctioneer) {
+        const lastNode = this.playerCircleContainer.last as Phaser.GameObjects.Container;
+        this.tweens.add({
+          targets: lastNode,
+          scaleX: { from: 1, to: 1.04 },
+          scaleY: { from: 1, to: 1.04 },
+          duration: 700,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+        });
+      }
+    }
+  }
+
   // ── Bid description ────────────────────────────────────────────────────
   private bidDescription(bid: Bid): string {
     if (bid.goats.length === 0) return `💰 ${bid.cash}`;
@@ -925,7 +1324,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ── Goat selector DOM overlay ─────────────────────────────────────────
-  private updateGoatSelectorOverlay(myPlayer: PlayerState, panelY: number) {
+  private updateGoatSelectorOverlay(myPlayer: PlayerState, panelY: number, panelCenterX = CENTER_X + 16) {
     if (this.goatSelectorOverlay) {
       this.goatSelectorOverlay.remove();
       this.goatSelectorOverlay = null;
@@ -939,7 +1338,7 @@ export class GameScene extends Phaser.Scene {
     const wrap = document.createElement('div');
     Object.assign(wrap.style, {
       position: 'absolute',
-      left:  (canvasRect.left + (CENTER_X + 16) * scaleX) + 'px',
+      left:  (canvasRect.left + (panelCenterX - 80) * scaleX) + 'px',
       top:   (canvasRect.top  + panelY * scaleY) + 'px',
       display: 'flex',
       flexDirection: 'column',
@@ -996,7 +1395,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   private hideBidComposerOverlays() {
-    if (this.bidInputOverlay) this.bidInputOverlay.style.display = 'none';
     if (this.goatSelectorOverlay) {
       this.goatSelectorOverlay.remove();
       this.goatSelectorOverlay = null;
@@ -1004,8 +1402,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   private cleanupDomOverlays() {
-    this.bidInputOverlay?.remove();
-    this.bidInputOverlay = null;
     this.goatSelectorOverlay?.remove();
     this.goatSelectorOverlay = null;
   }

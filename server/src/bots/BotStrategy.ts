@@ -17,10 +17,10 @@ export interface BidAction {
 
 /** What a bot does when it's the auctioneer and evaluating incoming bids */
 export interface AcceptAction {
-  action: 'accept' | 'wait';
-  /** The bidderId to accept — required when action === 'accept' */
+  action: 'accept' | 'hold' | 'reject' | 'wait';
+  /** The bidderId to act on — required when action is 'accept', 'hold', or 'reject' */
   bidderId?: string;
-  /** Milliseconds to wait before accepting */
+  /** Milliseconds to wait before executing the action */
   delayMs: number;
 }
 

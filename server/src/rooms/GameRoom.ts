@@ -449,7 +449,7 @@ export class GameRoom extends Room {
       this.gameState.players.length
     );
 
-    if (isGameOver(this.gameState.turnNumber)) {
+    if (isGameOver(this.gameState.turnNumber, this.gameState.players.length)) {
       const scores = computeScores(this.gameState.players, this.playerValueSheets);
       this.gameState.phase = 'ended';
       this.gameState.scores = scores;
@@ -463,6 +463,12 @@ export class GameRoom extends Room {
         scores,
         valueSheets: this.playerValueSheets,
         playerNames,
+        finalPlayers: this.gameState.players.map((p) => ({
+          id: p.id,
+          name: p.name,
+          hand: p.hand,
+          cash: p.cash,
+        })),
       });
     }
 
@@ -572,9 +578,9 @@ export class GameRoom extends Room {
   }
 
   /**
-   * If the current auctioneer is a bot, re-evaluate whether to accept a bid.
-   * Cancels any previous pending accept timer first so we always work from
-   * the freshest auction state.
+   * If the current auctioneer is a bot, re-evaluate whether to accept/hold/reject
+   * a bid. Cancels any previous pending auctioneer-action timer first so we always
+   * work from the freshest auction state.
    */
   private triggerBotAuctioneerAccept() {
     if (!this.gameState.auction || this.gameState.phase !== 'playing') return;
@@ -590,13 +596,25 @@ export class GameRoom extends Room {
     if (!strategy || !valueSheet) return;
 
     const decision = strategy.decideAccept(auctioneer, valueSheet, auction);
-    if (decision.action !== 'accept' || !decision.bidderId) return;
+    const timerKey = `accept-${auctioneer.id}`;
 
-    // Cancel the old accept timer and set a fresh one
-    const bidderId = decision.bidderId;
-    this.botManager.schedule(`accept-${auctioneer.id}`, decision.delayMs, () => {
-      this.executeBotAccept(auctioneer.id, bidderId);
-    });
+    if (decision.action === 'accept' && decision.bidderId) {
+      const bidderId = decision.bidderId;
+      this.botManager.schedule(timerKey, decision.delayMs, () => {
+        this.executeBotAccept(auctioneer.id, bidderId);
+      });
+    } else if (decision.action === 'hold' && decision.bidderId) {
+      const bidderId = decision.bidderId;
+      this.botManager.schedule(timerKey, decision.delayMs, () => {
+        this.executeBotHold(auctioneer.id, bidderId);
+      });
+    } else if (decision.action === 'reject' && decision.bidderId) {
+      const bidderId = decision.bidderId;
+      this.botManager.schedule(timerKey, decision.delayMs, () => {
+        this.executeBotReject(auctioneer.id, bidderId);
+      });
+    }
+    // 'wait': no timer needed
   }
 
   // ---------------------------------------------------------------------------
@@ -663,6 +681,46 @@ export class GameRoom extends Room {
     // and let the auctioneer bot re-evaluate
     this.triggerBotBidders(botId);
     this.triggerBotAuctioneerAccept();
+  }
+
+  /**
+   * Bot auctioneer holds the given open bid. Re-validates to guard against
+   * the bid having been retracted or the auction having closed since scheduling.
+   */
+  private executeBotHold(auctioneerBotId: string, bidderId: string) {
+    if (this.gameState.phase !== 'playing' || !this.gameState.auction) return;
+
+    const auction = this.gameState.auction;
+    if (auction.auctioneerPlayerId !== auctioneerBotId) return;
+
+    // Bid must still be in open bids (not already held or retracted)
+    const bidIdx = auction.bids.findIndex((b) => b.bidderId === bidderId);
+    if (bidIdx < 0) return;
+
+    auction.heldBid = null;
+    const [heldEntry] = auction.bids.splice(bidIdx, 1);
+    auction.heldBid = heldEntry;
+
+    this.broadcastState();
+    this.triggerBotBidders();
+  }
+
+  /**
+   * Bot auctioneer rejects the given open bid. Re-validates to guard against
+   * the bid having been retracted or the auction having closed since scheduling.
+   */
+  private executeBotReject(auctioneerBotId: string, bidderId: string) {
+    if (this.gameState.phase !== 'playing' || !this.gameState.auction) return;
+
+    const auction = this.gameState.auction;
+    if (auction.auctioneerPlayerId !== auctioneerBotId) return;
+
+    const bidIdx = auction.bids.findIndex((b) => b.bidderId === bidderId);
+    if (bidIdx < 0) return;
+
+    auction.bids = applyRejectedBid(auction.bids, bidderId);
+    this.broadcastState();
+    this.triggerBotBidders();
   }
 
   /**

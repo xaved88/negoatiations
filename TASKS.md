@@ -2,642 +2,307 @@
 
 ## Philosophy: Vertical Slices
 
-Each slice delivers a **working, tested, playable build**. We never finish a slice without tests. We never start a new slice without the previous one being stable. Slices expand functionality on top of a real running game — not bottom-up layers.
+Each slice delivers a **working, tested, playable build**. We never finish a slice without tests. We never start a new slice without the previous one being stable.
 
 Status indicators:
 - `[ ]` Not started
 - `[~]` In progress
 - `[x]` Complete
 
----
-
-## Slice 0: Project Setup
-
-### [x] Initialize project documents
-**Completed:** PROJECT.md, CLAUDE.md, and TASKS.md created.
-
-### [~] Define tasks and next steps
-**Status:** In progress
-**Goal:** Establish the vertical slice breakdown before any implementation begins.
-**Output:** This TASKS.md file, with Slice 1 tasks fully detailed and Slices 2+ stubbed.
-**Acceptance criteria:** Every Slice 1 task has a complete detail block. An agent can pick up any Slice 1 task and implement it without further clarification.
+> Completed work from Slices 0–3.5 has been archived in `TASKS_ARCHIVE.md`.
 
 ---
 
-## Slice 1: A Complete (Minimal) Playable Game
+## Active Tasks
 
-**Goal:** Two human players can open the game in a browser, create/join a room, play a full game (deal → auction rounds → scoring), and see a final score screen. All server logic is unit tested. The full user flow has a UI test.
-
-This slice deliberately keeps things minimal: accept-only auctions (no hold/reject), cash-only bids (no goat trading), placeholder art, no bots, no timers. The point is a real end-to-end game loop that works and is tested.
+The tasks below are bugs, balance issues, and UX improvements identified during playtesting. They are roughly ordered by impact on playability, but may be tackled in any order that makes sense given dependencies.
 
 ---
 
-### [x] Scaffold monorepo
+### [x] UI Bug: Score screen shows connection ID instead of player name
 
-**Completed:** Root package.json with npm workspaces, all three packages (shared, server, client) with proper tsconfig.json files, TypeScript path aliases configured. Root npm scripts for dev, test:unit, test:ui, typecheck all working. All dependencies installed.
+**Description:** The end-game score screen currently displays raw player IDs (Colyseus session IDs like `abc123def`) instead of human-readable names. This makes the score screen unreadable.
 
-**Description:** Set up the project skeleton so all three packages exist, TypeScript is configured, and dev servers run.
+**Root cause:** The `gameOver` broadcast probably sends `scores` keyed by player ID, and the client renders the key directly rather than looking up the player's name.
 
-**Tasks:**
-- Create root `package.json` with npm workspaces: `client`, `server`, `shared`
-- Init each package with its own `package.json` and `tsconfig.json` (strict mode, path aliases for `shared`)
-- Add Vite + Phaser 3 to `client/` — display a placeholder "Negoatiations" title screen
-- Add Colyseus + Node.js to `server/` — a `HelloRoom` that echoes a ping message back to any connected client
-- Wire the client to connect to the Colyseus server on startup and log a confirmed connection in the browser console
-- Configure Vitest in `server/` with a passing smoke test (`1 + 1 === 2`)
-- Configure Playwright in `client/` with a passing smoke test (page title contains "Negoatiations")
-- Add root-level npm scripts: `dev` (runs both servers), `test:unit`, `test:ui`, `typecheck`
+**Changes:**
+- Server already includes `playerNames: Record<string, string>` in the `gameOver` broadcast — verify this is being sent correctly
+- Update `GameScene.ts` (or wherever the score screen is rendered) to look up each player ID in `playerNames` and display the name instead
+- Fall back to the ID only if the name is missing (defensive)
 
 **Acceptance criteria:**
-- `npm run dev` starts both servers without errors
-- Browser loads the client and console shows a successful Colyseus connection
+- Score screen shows "Alice — 142 pts", "Bot Bailey — 88 pts", etc.
+- No raw session IDs visible anywhere on the score screen
+- Works for both human and bot players
+
+**Completion note:** Runtime code (server broadcast + ScoreScene lookup) was already correct. Added `playerNames` to the `GameOverEvent` type in `shared/types.ts` and added assertions in `GameRoom.test.ts` to verify it's present and correct in the broadcast.
+
+---
+
+### [x] Game Bug: Turn counter increments per auction instead of per full round
+
+**Description:** `TURNS_PER_GAME` is being compared against `turnNumber`, but `turnNumber` increments by 1 after each individual auction. In a 5-player game with `TURNS_PER_GAME = 3`, the game ends after only 3 auctions total — meaning 2 players never get a chance to be auctioneer in even the first round.
+
+**Intended behaviour:** "3 turns" means every player auctions 3 times each. In a 5-player game, that is 15 auctions total (5 players × 3 turns).
+
+**Fix:**
+- **Preferred:** Change `isGameOver` to check full rounds: `Math.floor(turnNumber / playerCount) >= TURNS_PER_GAME`. This keeps the constant human-readable ("3 rounds per player").
+- Update `isGameOver` in `server/src/logic/turns.ts` to accept `playerCount` as a second argument
+- Update the call site in `GameRoom.ts` (`endAuction`) to pass `this.gameState.players.length`
+- Update `TURNS_PER_GAME` constant comment to clarify it means "rounds per player, not total auctions"
+- Update `turns.test.ts` to cover the new two-argument signature and add a test: "game is not over after first N auctions when there are 5 players"
+- Update `TEST_MODE` logic — test mode should end after 1 full round (5 auctions) for speed, not after 4 individual auctions
+
+**Acceptance criteria:**
+- In a 5-player game with `TURNS_PER_GAME = 3`, exactly 15 auctions occur before game over
+- Every player (human + bot) gets to be auctioneer exactly the same number of times
 - `npm run test:unit` passes
-- `npm run test:ui` passes
-- `npm run typecheck` passes with zero errors
+
+**Completion note:** Changed `isGameOver(turnNumber, playerCount)` to use `Math.floor(turnNumber / playerCount) >= TURNS_PER_GAME`. Updated call site in `GameRoom.ts`. Changed `TURNS_PER_GAME` in TEST_MODE from 4 → 1 (1 full round = playerCount auctions, fast for tests). Updated `turns.test.ts` with new two-argument signature and added 5-player test. All 108 tests pass.
 
 ---
 
-### [x] Shared types and constants
+### [x] Balance: Players should start with one of each goat type
 
-**Completed:** All types defined in shared/src/types.ts (GoatType, Goat, ValueSheet, Bid, BidEntry, AuctionState, PlayerState, GameState, and all message types). All constants defined in shared/src/constants.ts with TEST_MODE support for TURNS_PER_GAME.
+**Description:** Currently `dealHands` deals a randomly shuffled pool, so a player might receive three Silly goats and zero Grumpy goats. This creates unintended luck variance and makes strategy harder — your value sheet is meaningless if you never draw the goat type you value most.
 
-**Description:** Define all types and constants that client and server both depend on. These live in `shared/` and are never duplicated.
+**Intended behaviour:** Every player's starting hand contains exactly one of each goat type: one Silly, one Angry, one Happy, one Hungry, one Grumpy. All players start on equal footing and every goat type in the value sheet is relevant from turn 1.
 
-**Types to define:**
-- `GoatType` — enum: `Silly | Angry | Happy | Hungry`
-- `Goat` — `{ id: string; type: GoatType }`
-- `ValueSheet` — `Record<GoatType, number>` (points per goat type)
-- `Bid` — `{ cash: number; goats: Goat[] }`
-- `AuctionState` — `{ auctioneerPlayerId: string; goatOnOffer: Goat; bids: BidEntry[]; status: 'open' | 'closed' }`
-- `BidEntry` — `{ bidderId: string; bid: Bid }`
-- `PlayerState` — `{ id: string; name: string; hand: Goat[]; cash: number; isBot: boolean }`
-- `GameState` — `{ players: PlayerState[]; phase: 'lobby' | 'playing' | 'ended'; currentAuctioneerIndex: number; auction: AuctionState | null; turnNumber: number; scores: Record<string, number> | null }`
-
-**Client → Server messages:**
-- `PutUpForAuction` — `{ goatId: string }`
-- `PlaceBid` — `{ bid: Bid }`
-- `AcceptBid` — `{ bidderId: string }`
-
-**Server → Client messages:** (Colyseus state sync handles most; define explicit events for:)
-- `AuctionAccepted` — `{ winnerId: string; loserId: string; bid: Bid }`
-- `GameOver` — `{ scores: Record<string, number>; valueSheets: Record<string, ValueSheet> }`
-
-**Constants (in `shared/constants.ts`):**
-- `MAX_PLAYERS = 5`
-- `STARTING_CASH = 100`
-- `GOATS_PER_PLAYER = 5`
-- `GOAT_TYPE_COUNT` (number of distinct types)
-- `TURNS_PER_GAME` (total auction turns before game ends; start with `MAX_PLAYERS * 3`)
+**Changes:**
+- Rewrite `dealHands` in `server/src/logic/dealing.ts`: construct each hand as one goat of each type with a unique ID, e.g. `Object.values(GoatType).map((type, i) => ({ id: \`goat-p${playerIdx}-${i}\`, type }))`
+- Remove the old modulo-based shuffle pool — it's no longer needed
+- Update `dealing.test.ts`: replace "distributes goat types evenly" (trivially true by construction) with "each hand contains exactly one of each goat type"
 
 **Acceptance criteria:**
-- `npm run typecheck` passes with zero errors
-- Both `client/` and `server/` can import from `shared/` without issues
-- No type definitions duplicated across client or server
-
----
-
-### [x] Server: pure game logic
-
-**Completed:** All pure logic functions implemented (dealHands, generateValueSheets, validateBid, applyAcceptedBid, nextAuctioneerIndex, isGameOver, computeScores). Full unit test suite with 5+ test cases per function covering happy paths, edge cases, and invalid inputs. All tests compile successfully with TypeScript.
-
-**Description:** Implement all game logic as pure functions in `server/src/logic/`. No Colyseus, no network, no side effects. Each function has corresponding unit tests.
-
-**Description:** Implement all game logic as pure functions in `server/src/logic/`. No Colyseus, no network, no side effects. Each function has corresponding unit tests.
-
-**Functions to implement:**
-
-`dealing.ts`
-- `dealHands(playerCount: number, goatsPerPlayer: number): Goat[][]` — randomly distributes goats across hands, each hand having a balanced mix of types
-
-`valueSheets.ts`
-- `generateValueSheets(playerCount: number): ValueSheet[]` — produces one unique value sheet per player; all players' sheets should use the same range of values but assigned to different types so no two players value goats identically
-
-`bidding.ts`
-- `validateBid(bid: Bid, bidderState: PlayerState): boolean` — confirms the bidder actually has the goats and cash they're offering
-- `applyAcceptedBid(auctioneer: PlayerState, bidder: PlayerState, goatOnOffer: Goat, bid: Bid): [PlayerState, PlayerState]` — returns updated auctioneer and bidder states after the exchange
-
-`turns.ts`
-- `nextAuctioneerIndex(current: number, playerCount: number): number` — simple round-robin
-- `isGameOver(turnNumber: number): boolean` — returns true when `turnNumber >= TURNS_PER_GAME`
-
-`scoring.ts`
-- `computeScores(players: PlayerState[], valueSheets: Record<string, ValueSheet>): Record<string, number>` — for each player: `cash + sum(goat counts × value per type)`
-
-**Unit tests required for every function above.** Tests should cover:
-- Happy path
-- Edge cases (empty hand, zero cash bids, ties in scoring, etc.)
-- Invalid inputs (bid validation with insufficient funds/goats)
-
-**Acceptance criteria:**
+- Every player starts with exactly one Silly, one Angry, one Happy, one Hungry, one Grumpy
 - `npm run test:unit` passes
-- 100% of the functions listed above have at least 3 test cases each
-- No `any` types
+- `npm run typecheck` passes
+
+**Completion note:** Replaced pool/shuffle with deterministic per-player construction: one of each GoatType per hand. Updated `dealing.test.ts` to assert exactly one of each type per hand (not just even global distribution). All 108 tests pass.
 
 ---
 
-### [x] Server: Colyseus GameRoom (Slice 1)
+### [x] Bot Issue: Bots should use Hold and Reject during auctions
 
-**Completed:** Full GameRoom implementation with all required handlers (onCreate, onJoin, onLeave, StartGame, PutUpForAuction, PlaceBid, AcceptBid). Proper state management, private value sheet handling, and game over detection. Server index.ts configured to run Colyseus on port 2567.
-
-**Description:** Wire the pure logic functions into a Colyseus `GameRoom`. The room manages state, receives player messages, and broadcasts updates.
-
-**Description:** Wire the pure logic functions into a Colyseus `GameRoom`. The room manages state, receives player messages, and broadcasts updates.
-
-**Responsibilities:**
-- `onCreate`: initialize empty room state
-- `onJoin`: add player to state; auto-start game when 2+ players are seated and host sends start message (Slice 1 simplification — no waiting room gating yet)
-- `onLeave`: mark player as disconnected (don't crash the game)
-- Handle `PutUpForAuction`: validate it's the auctioneer's turn, set auction state
-- Handle `PlaceBid`: validate bid (use `validateBid`), add to auction's bid list
-- Handle `AcceptBid`: apply the exchange (use `applyAcceptedBid`), advance the turn, check for game over
-- On game over: compute scores (use `computeScores`), broadcast `GameOver` event with value sheets revealed
-- Colyseus schema: define `@Schema` classes for `GameState`, `PlayerState`, `AuctionState` etc.
-
-**Acceptance criteria:**
-- Two browser tabs can connect to the same room
-- A full game (deal → auction loop → game over) completes without server errors
-- State updates are received by both clients after every action
-
----
-
-### [x] Client: Lobby scene
-
-**Completed:** DOM-based lobby with player name input, Create Game button, and dynamically updating list of available rooms. Room list polls Colyseus matchMaker every 2 seconds. Proper transitions to Game scene on join/create.
-
-**Description:** The first screen players see. Lists open games and lets players create or join one.
-
-**Description:** The first screen players see. Lists open games and lets players create or join one.
-
-**UI elements:**
-- Text input: player name
-- "Create Game" button — creates a new Colyseus room, transitions to Game scene
-- List of open games — each shows "{Host Name}'s game" and a player count badge; clicking joins and transitions to Game scene
-- List polls or subscribes for updates every few seconds
-
-**Implementation notes:**
-- Use DOM elements (not Phaser canvas) for the lobby — it's outside the game proper
-- Colyseus `matchMaker.getAvailableRooms("game")` to list open rooms
-- Store the player name in memory for the session
-
-**Acceptance criteria:**
-- Player can create a room and see it appear in the list
-- A second player can join the room from the list
-- Both players transition to the Game scene
-
----
-
-### [x] Client: Game scene (Slice 1)
-
-**Completed:** Full Phaser GameScene with all UI panels (Your Hand, Auction Panel with bids and accept/bid buttons, Other Players info, Turn indicator, Value Sheet display). Proper handling of auctioneer vs bidder states, real-time state updates from server, and private value sheet display.
-
-**Description:** The in-game Phaser scene. Shows the player's hand, the active auction, and other players' public info.
-
-**Description:** The in-game Phaser scene. Shows the player's hand, the active auction, and other players' public info.
-
-**Panels / components:**
-
-*Your Hand panel*
-- Displays each goat in your hand as a labeled card (type name + placeholder colored rectangle for now)
-- On your turn as auctioneer: clicking a goat puts it up for auction (sends `PutUpForAuction`)
-
-*Auction panel* (visible when auction is active)
-- Shows the goat on offer (whose it is, what type)
-- Lists all bids placed so far (bidder name + cash amount)
-- If you are NOT the auctioneer: shows a cash input + "Place Bid" button (sends `PlaceBid`)
-- If you ARE the auctioneer: shows "Accept" button next to each bid (sends `AcceptBid`)
-
-*Other players panel*
-- For each other player: name, goat count (not types), cash balance
-
-*Your info panel*
-- Your name, cash balance, goat count
-- Your value sheet (visible only to you)
-
-*Turn indicator*
-- Shows whose turn it is to auction
-
-**Acceptance criteria:**
-- A complete game loop is playable in the browser
-- State updates from server are reflected in real time
-- Auctioneer controls are only shown to the correct player
-
----
-
-### [x] Client: Score screen
-
-**Completed:** ScoreScene displaying ranked players with scores, value sheets revealed for all players, and Return to Lobby button. Proper formatting and winner highlighting.
-
-**Description:** Shown when the server emits `GameOver`. Reveals all value sheets and final scores.
-
-**Description:** Shown when the server emits `GameOver`. Reveals all value sheets and final scores.
-
-**UI elements:**
-- Table: one row per player showing name, final cash, goat breakdown, total score
-- Value sheet reveal: each player's sheet is shown so players can see how others valued goats
-- Winner highlight
-- "Return to Lobby" button
-
-**Acceptance criteria:**
-- Score screen appears automatically when game ends
-- All scores match server-computed values
-- "Return to Lobby" navigates back to the Lobby scene
-
----
-
-### [x] UI test: full Slice 1 game flow
-
-**Completed:** Playwright test (game-flow.spec.ts) covering full end-to-end user journey: two browser contexts, player creation/joining, game start, auction turns, bidding, and score screen. Proper waiting and element interaction patterns.
-
-**Description:** Playwright test that exercises the complete end-to-end user journey.
-
-**Description:** Playwright test that exercises the complete end-to-end user journey.
-
-**Test scenario:**
-1. Open two browser contexts (Player A and Player B)
-2. Player A enters a name and creates a game
-3. Player B enters a name and joins Player A's game from the lobby list
-4. Both players see the Game scene
-5. Player A (first auctioneer) selects a goat to auction
-6. Player B places a cash bid
-7. Player A accepts the bid
-8. Turn advances; play continues until game ends (or fast-forward via enough turns)
-9. Score screen appears with correct data for both players
-10. Both players click "Return to Lobby" and arrive back at the lobby
-
-**Acceptance criteria:**
-- Test runs headlessly in CI
-- Test passes reliably (no flakiness from timing)
-- Both player perspectives are validated
-
----
-
-## Slice 2: Rich Auction Mechanics
-
-**Goal:** Auctions become full-featured. Auctioneers can hold or reject bids. Bidders can include goats in their offers. Auctions auto-close after a timer expires.
-
----
-
-### [ ] Server: Hold and Reject bid mechanics
-
-**Description:** Give the auctioneer more control over in-progress auctions.
-
-**Hold:** Marks a bid as the current best offer, signaling to other players that they need to beat it. The auction remains open. If the timer expires while a bid is held, that bid is auto-accepted.
-
-**Reject:** Removes a bid from the auction entirely. The rejected player may bid again.
+**Description:** When a bot is the auctioneer, it currently only accepts or waits. Real auctioneers should also hold promising bids (to signal interest and buy time) and reject bids that fall below a floor price. This makes bot auctions feel more alive and teaches human players that those mechanics exist.
 
 **Changes:**
-- Add `heldBidderId: string | null` to `AuctionState` in `shared/types.ts` — tracks which bid (by player ID) is currently held
-- Add `HoldBidMsg` and `RejectBidMsg` client→server message types to `shared/types.ts`
-- Add `applyRejectedBid(bids: BidEntry[], bidderId: string): BidEntry[]` pure function in `server/src/logic/bidding.ts` — returns the bid list with that entry removed
-- Add `handleHoldBid` and `handleRejectBid` handlers to `GameRoom`
-  - Both validate that the caller is the current auctioneer
-  - `handleHoldBid`: sets `auction.heldBidderId` to the given player ID
-  - `handleRejectBid`: calls `applyRejectedBid`, clears `heldBidderId` if the rejected bid was held, broadcasts state
+- Expand `AcceptAction` in `BotStrategy.ts` to support `action: 'accept' | 'hold' | 'reject' | 'wait'`
+- Update `NaiveBotStrategy.decideAccept` with three tiers:
+  - **Reject** bids below ~30% of the goat's value — prompt bidders to raise
+  - **Hold** bids between ~30% and the profit threshold — signals "this is interesting, keep going"
+  - **Accept** bids at or above the profit threshold (existing logic, but now delayed until near timer — see timing task below)
+  - **Wait** when there are no open bids
+- Add `executeBotHold` and `executeBotReject` methods to `GameRoom.ts` (analogous to `executeBotAccept`), calling the existing `handleHoldBid` and `handleRejectBid` internal logic
+- Wire the new actions into `triggerBotAuctioneerAccept`
+- Update `bots.test.ts` to cover hold and reject branches
 
 **Acceptance criteria:**
-- Auctioneer can hold any open bid; `heldBidderId` is reflected in broadcast state
-- Auctioneer can reject any open bid; it is removed from `auction.bids`
-- Rejecting the held bid also clears `heldBidderId`
-- Non-auctioneers cannot hold or reject bids (silently ignored)
-
----
-
-### [ ] Server: Auction timer
-
-**Description:** Each auction automatically closes after a fixed number of seconds (`AUCTION_TIMER_SECONDS`). If a bid is held when the timer fires, it is auto-accepted. If no bid is held, the auction ends with no sale and the turn advances.
-
-**Changes:**
-- Add `AUCTION_TIMER_SECONDS = 30` constant to `shared/constants.ts`
-- Add `timerEndsAt: number | null` to `AuctionState` in `shared/types.ts` — Unix timestamp (ms) when the auction closes, broadcast to clients so they can display a countdown
-- In `GameRoom`: store a `private auctionTimer: ReturnType<typeof setTimeout> | null` (server-internal, not in game state)
-- In `handlePutUpForAuction`: set `auction.timerEndsAt = Date.now() + AUCTION_TIMER_SECONDS * 1000` and start the timeout
-- In `handleAcceptBid`: clear the timer before applying the bid
-- Add `private handleAuctionTimeout()`: if a bid is held, auto-accept it (same logic as `handleAcceptBid`); then advance turn / check game over regardless. Extract shared `endAuction()` helper to avoid duplication.
-
-**Acceptance criteria:**
-- Auction auto-closes after `AUCTION_TIMER_SECONDS` seconds
-- If a held bid exists at timeout, it is accepted and the exchange is applied
-- If no held bid exists at timeout, turn advances with no exchange (goat stays with auctioneer)
-- Manual `AcceptBid` clears the timer so it doesn't fire late
-
----
-
-### [ ] Server: Goat-inclusive bids
-
-**Description:** Bidders can include goats from their hand in a bid. The exchange when a bid is accepted becomes: bidder gives `bid.cash` + `bid.goats` to auctioneer; auctioneer gives `goatOnOffer` to bidder.
-
-**Changes:**
-- Update `validateBid` in `server/src/logic/bidding.ts`:
-  - Check bidder has all goats listed in `bid.goats` (match by `id`)
-  - Check no duplicate goat IDs in `bid.goats`
-  - Add `bid.cash >= 0` guard
-- Update `applyAcceptedBid` in `server/src/logic/bidding.ts`:
-  - Auctioneer gains `bid.goats` (adds them to hand), loses `goatOnOffer`, gains `bid.cash`
-  - Bidder loses `bid.goats` (removes from hand), gains `goatOnOffer`, loses `bid.cash`
-- Remove the "Slice 1" comment from `Bid.goats` in `shared/types.ts`
-
-**Acceptance criteria:**
-- `validateBid` rejects bids where bidder lacks an offered goat
-- `validateBid` rejects bids with duplicate goat IDs
-- `applyAcceptedBid` correctly transfers goats in both directions
-- Cash-only bids (empty `goats` array) still work as before
-
----
-
-### [ ] Client: Hold/Reject controls and timer display
-
-**Description:** Update the auction panel so the auctioneer can hold and reject bids, and all players can see the auction countdown.
-
-**Changes (in `GameScene.updateAuctionPanel`):**
-- For each bid, if current player is auctioneer: show three buttons — **Accept**, **Hold**, **Reject**
-  - Accept: already exists
-  - Hold: sends `HoldBid { bidderId }`, styled in amber/yellow
-  - Reject: sends `RejectBid { bidderId }`, styled in red
-- Highlight the held bid row (e.g., green background or "★ HELD" label) so it's visually distinct
-- Add a timer text element that shows seconds remaining, updated every frame in `GameScene.update()`
-  - Derive seconds from `state.auction.timerEndsAt - Date.now()`
-  - Show in red when ≤ 10 seconds remain
-
-**Acceptance criteria:**
-- Auctioneer sees Accept / Hold / Reject for each bid
-- Held bid is visually highlighted
-- Timer countdown is visible to all players and turns red at ≤10 seconds
-
----
-
-### [ ] Client: Goat selection in bid composer
-
-**Description:** Non-auctioneer players can include goats from their hand when placing a bid.
-
-**Changes (in `GameScene.updateAuctionPanel`):**
-- Add a goat selection area to the bid composer (visible only when not auctioneer)
-- Show each goat in the bidder's hand as a toggle button (click to select/deselect)
-- Track selected goat IDs in a class property `private selectedBidGoatIds: Set<string>`
-- When "Place Bid" is submitted, include selected goats in the `PlaceBid` message: `{ bid: { cash, goats: selectedGoatsArray } }`
-- Clear `selectedBidGoatIds` after a bid is placed
-- Update the bid display to show goats in bids: `Bob: 12 cash + [Silly, Angry]` (or just "12 cash" for cash-only bids)
-
-**Acceptance criteria:**
-- Bidder can toggle goats on/off for inclusion in their bid
-- Selected goats are sent with the bid
-- Bid display shows goat types when present
-- Deselected state resets after each bid
-
----
-
-### [ ] Unit tests: Slice 2 logic
-
-**Description:** Full test coverage for all new and updated logic functions.
-
-**New tests in `server/tests/bidding.test.ts`:**
-
-`validateBid` additions:
-- Returns false when bid includes a goat the bidder doesn't have
-- Returns false when bid includes duplicate goat IDs
-- Returns false when `bid.cash` is negative
-- Returns true when bid includes valid goats from bidder's hand
-
-`applyAcceptedBid` additions:
-- Auctioneer gains bid goats in hand
-- Bidder loses bid goats from hand
-- Cash-only bid (no goats) still works (regression)
-
-`applyRejectedBid` (new):
-- Removes the target bid from the list
-- Returns unchanged list if bidderId not found
-- Works correctly when removing the only bid
-- Works correctly when multiple bids exist
-
-**Acceptance criteria:**
+- Bot auctioneers hold bids on mid-range offers
+- Bot auctioneers reject clearly low-ball bids
 - `npm run test:unit` passes
-- All new functions have ≥ 3 test cases each
+
+**Completion note:** Extended `AcceptAction` type to `'accept' | 'hold' | 'reject' | 'wait'`. Implemented three-tier logic in `NaiveBotStrategy.decideAccept`: reject (<30% value), hold (30–70%), accept (≥70%). Added `executeBotHold` and `executeBotReject` to `GameRoom.ts`. Updated `triggerBotAuctioneerAccept` to dispatch all four action types. Updated tests; 109 pass.
 
 ---
 
-### [ ] UI test: Slice 2 flows
+### [x] Bot Issue: Bots should wait until near timer expiry to accept
 
-**Description:** Add Playwright scenarios covering the new mechanics.
+**Description:** Bot auctioneers currently accept qualifying bids after a short random delay (1.5–5s). This makes bot auctions feel rushed and doesn't give human bidders time to counter. Auctioneers should milk the drama.
 
-**New test scenarios (new `describe` block in `game-flow.spec.ts` or a new file):**
+**Intended behaviour:**
+1. When a bid crosses the hold threshold, hold it quickly (1–3s delay) to signal interest
+2. Only accept (or move from hold to accept) in the final 2–3 seconds of the auction timer
+3. If a better bid arrives while holding, re-evaluate immediately
 
-1. **Hold then accept a different bid:**
-   - Player A auctions a goat
-   - Player B places a bid
-   - Player A holds Player B's bid
-   - (Simulate second bidder or Player B raises bid)
-   - Player A accepts the second/raised bid
-   - Turn advances
-
-2. **Reject a bid:**
-   - Player A auctions a goat
-   - Player B places a bid
-   - Player A rejects it
-   - Bid disappears from the auction panel
-   - Player B can bid again
-
-3. **Goat-inclusive bid:**
-   - Player A auctions a goat
-   - Player B selects a goat toggle and enters cash amount
-   - Player B places bid
-   - Bid panel shows goat types in the bid
-   - Player A accepts; goat exchange is reflected in both players' hand counts
+**Changes:**
+- In `NaiveBotStrategy.decideAccept` (and/or in `GameRoom.triggerBotAuctioneerAccept`), compute `delayMs = (auction.timerEndsAt - Date.now()) - randInt(1500, 3000)` for accept actions
+- Guard `delayMs < 500` → accept immediately (timer nearly expired)
+- The hold action keeps a short delay (1–3s) so it happens quickly once a good bid arrives
+- Update `bots.test.ts` timing assertions to reflect the new delay logic
 
 **Acceptance criteria:**
-- Tests run headlessly
-- All three scenarios pass reliably
+- Bot auctions visibly run most of their timer before the accept fires
+- Bot still accepts promptly when the timer is nearly expired
+- Combines cleanly with the Hold/Reject task above (implement together or in order)
+
+**Completion note:** Implemented as part of the Hold/Reject task. Accept delay is `Math.max(500, timerEndsAt - now - randInt(1500, 3000))`, so bot waits until 1.5–3 s before timer expiry to accept. Test verifies delay > 24 s for a 30 s timer.
 
 ---
 
-## Slice 3: Bots Fill Empty Seats
+### [x] UX: Animate bid accepted, rejected, and held feedback
 
-**Goal:** Server-side bots auto-fill empty seats so every game has 5 participants. Bots have a pluggable strategy interface so future strategies (conservative, risky, random) can be swapped in without touching GameRoom wiring.
+**Description:** When the auctioneer accepts, rejects, or holds a bid, the bidder currently gets no visual feedback beyond the state updating. This makes the game feel unresponsive.
 
----
+**Animations to add:**
+- **Accepted:** Green flash on the bid entry + brief "✓ Accepted!" text pop; lead into the goods-transfer animation (see next task)
+- **Rejected:** Red shake animation on the bid entry + "✗ Rejected" text; bid entry disappears with a dismissive effect
+- **Held:** Amber/yellow highlight on the bid entry; a small lock icon or "On hold" label appears
 
-### [x] Bot strategy interface + BotManager
-
-**Completed:** `server/src/bots/BotStrategy.ts` defines the `BotStrategy` interface with three decision methods (`decideAuction`, `decideBid`, `decideAccept`). Each returns a typed action object including a `delayMs` field so the caller controls all timing. `BotManager` (`server/src/bots/BotManager.ts`) manages named setTimeout handles, cancelling stale timers on reschedule and providing `cancelAll()` for room disposal.
-
----
-
-### [x] NaiveBotStrategy implementation
-
-**Completed:** `server/src/bots/NaiveBotStrategy.ts` implements `BotStrategy` with naive but readable decision logic:
-
-- **Auctioneering:** Sells the lowest-value goat first (least regret). Delays 1–3 s.
-- **Bidding:** Bids only if profitable (goatValue > currentMaxBid + profit buffer). Uses chunked increments of 5–15 gold rounded up to nearest 5 (not "+1 forever"). Caps bids at goatValue − random buffer (3–8). Delays 1.5–5 s.
-- **Accepting:** Accepts the highest bid ≥ 70% of the goat's personal value. Considers both open and held bids. Delays 2–5 s.
-
-Pure helper functions (`randInt`, `roundUpToStep`, `currentMaxBid`, `highestBidEntry`) are exported for unit testing.
-
----
-
-### [x] Bot seat auto-fill + GameRoom wiring
-
-**Completed:** `GameRoom.fillWithBots()` adds named bot players (Bailey, Chester, Daisy, Earl, Fern) to fill seats to MAX_PLAYERS (5) when the host starts the game. Bots receive value sheets and hands in the same deal as humans. GameRoom now calls:
-
-- `scheduleIfBotTurn()` after every `endAuction()` — triggers bot auctioneer if needed
-- `triggerBotBidders()` after every auction opens or a bid changes — each non-auctioneer bot gets a fresh, randomly-timed evaluation
-- `triggerBotAuctioneerAccept()` after any bid change — bot auctioneer re-evaluates whether to accept
-- `cancelAll()` on room dispose to prevent stale callbacks
-- Stale-state guards throughout: all execution callbacks re-validate phase/auction/player state before acting
-
----
-
-### [x] Unit tests for bot decision logic
-
-**Completed:** `server/tests/bots.test.ts` covers:
-
-- `randInt`, `roundUpToStep`, `currentMaxBid`, `highestBidEntry` — all helper edge cases
-- `NaiveBotStrategy.decideAuction` — picks lowest-value goat, returns valid delay and id
-- `NaiveBotStrategy.decideBid` — profitable/unprofitable paths, self-outbid guard, cash cap, chunked rounding, zero-value goat
-- `NaiveBotStrategy.decideAccept` — threshold enforcement, held bid considered, highest-wins, positive delay
-- `BotManager` — scheduling, key-replacement cancellation, cancel(), cancelAll(), pendingCount
-
----
-
-### [ ] UI test: game with 1 human + bots completes successfully
-
-**Description:** Playwright test that starts a game with a single human player (bots fill the other 4 seats) and plays until the score screen appears.
-
-**Scenario:**
-1. One browser opens the lobby, enters a name, creates a game
-2. Player starts the game immediately (bots fill remaining seats)
-3. Player bids or auctioneers for a few turns (fast-forward via TEST_MODE turn count)
-4. Game ends; score screen shows all 5 players (bots included)
-5. Player returns to lobby
+**Changes:**
+- Detect bid state transitions by diffing old vs new auction state on each `stateUpdate`
+- Add Phaser tween helpers in `GameScene.ts` or a new `client/src/ui/BidAnimations.ts`
+- Keep animations short (300–500ms) so they don't slow gameplay
+- Ensure animations fire for all observers (not just the affected bidder), since it's visible to everyone
 
 **Acceptance criteria:**
-- Test runs headlessly
-- Score screen shows bot names (Bailey, Chester, etc.)
-- No server errors during the bot-driven turns
+- All three transitions have a distinct, non-confusable animation
+- Animations trigger correctly from every player's perspective
+- No animation plays twice for the same event (guard against duplicate state updates)
+
+**Completion note:** Diffing logic in `stateUpdate` handler detects open→held (amber) and open→gone (rejected, red) transitions. `recentlyHeldBidderId` triggers an amber border pulse on the held bid row; cleared via tween `onComplete`. `recentlyRejectedBidderIds` triggers a red flash overlay above the open bids section; cleared on tween complete. Screen-level flashes for accept/reject still fire from existing `bidAccepted`/`bidRejected` messages.
 
 ---
 
-## Slice 3.5: Game Balance & Bot Fixes
+### [x] UX: Announce auction winner and animate goods transfer
 
-**Goal:** Fix several issues discovered during Slice 3 testing that affect gameplay quality and bot correctness. All changes are logic/data — no new UI needed.
+**Description:** When an auction is accepted, there is no clear announcement of who won, what they paid, or what goat changed hands. This is the most important moment in the game and should be celebrated.
 
-**Completed:** All tasks finished. 106 tests passing, zero typecheck errors. Added Grumpy as 5th goat type, rebalanced values to 50/40/30/20/10 with randomized Latin square assignment, fixed bots not bidding on human-auctioned goats, shuffled player turn order, and enabled solo play vs all bots.
-
----
-
-### [x] Add a 5th goat type
-
-**Completed:** Added `Grumpy` to `GoatType` enum, updated `GOAT_TYPES` constant to 5, assigned purple color (0xAA44AA) in GameScene, and added Grumpy to all test fixture value sheets (bots.test.ts, scoring.test.ts).
+**What to show:**
+- A center-screen banner for 2–3 seconds: "Bailey sold a Grumpy Goat to Alice for 35 gold!" — then fade out
+- A goat-card token animating from the seller's position to the buyer's position on the player circle
+- Cash counter animations: numbers tick down on the buyer and up on the seller simultaneously
+- For no-sale (timer expired, no held bid): a brief "No sale — goat kept!" message
 
 **Changes:**
-- Added `Grumpy = 'Grumpy'` to `GoatType` enum in `shared/src/types.ts`
-- Updated `GOAT_TYPES = 5` in `shared/src/constants.ts`
-- Added `[GoatType.Grumpy]: 0xAA44AA` to `GOAT_COLORS` in `client/src/scenes/GameScene.ts`
-- Updated all test fixtures to include `[GoatType.Grumpy]: 0` in value sheets
+- Detect auction-accepted vs auction-timeout transitions in `GameScene.ts` by diffing state
+- Build a `showAuctionResult(seller, buyer, goat, price)` method that orchestrates banner + token tween + cash tick
+- Goat token tween: use the player circle node positions as source/destination (see player circle task)
+- Cash tick: Phaser number interpolation tween on the cash display text objects
+
+**Acceptance criteria:**
+- Every accepted auction triggers the announcement banner and animations
+- Goat visibly "moves" to the new owner
+- Cash displays update with a tick animation
+- No-sale auctions show a "No sale" message instead
+
+**Completion note:** Detects auction→null transitions in `stateUpdate`; determines sale vs no-sale by checking if seller lost the goat. Shows a dark banner (fade in → hold 2s → fade out) with sale summary or "No sale — goat kept!" message. On sale: tweens a colored goat token from seller player circle node to buyer node (using `playerNodePositions` from Task 7). Cash values update in real time on next stateUpdate via player circle node text.
 
 ---
 
-### [x] Rebalance goat values to 50/40/30/20/10
+### [x] UX: Players displayed in a circle around the auction table
 
-**Completed:** Rewritten `generateValueSheets` to use `[50,40,30,20,10]`. Each player gets exactly one of each value. NaiveBotStrategy works well with existing parameters (profit buffer 3-8, increments 5-15 rounded to 5) at the new scale. All affected tests updated.
+**Description:** Currently players are shown in a flat right-side list. Instead, all players should be arranged in a circle around a central auction table, making the social dynamic of the game visually clear.
+
+**Layout rules:**
+- The local player (you) is always anchored at the bottom-center of the circle
+- Other players are arranged clockwise in turn order from the current player's left
+- The active auctioneer is visually highlighted (glowing border, raised card, or spotlight)
+- Each player node shows: avatar placeholder, name, cash balance, and goat-count badge
 
 **Changes:**
-- Rewrote `generateValueSheets` to assign `[50,40,30,20,10]` as the base value set
-- Implemented randomized Latin square (shuffled rows and columns) to preserve uniqueness while hiding structure from players
-- Updated `valueSheets.test.ts` to assert values are `[10,20,30,40,50]` sorted
-- Updated `dealing.test.ts` to use `dealHands(5,5)` for even distribution test
+- Replace the right-side player list panel in `GameScene.ts` with a `PlayerCircle` component (`client/src/ui/PlayerCircle.ts`)
+- Compute node positions based on canvas dimensions and player count; use Phaser `Container` for each node so they can animate independently
+- On each `stateUpdate`, update cash/goat-count text and reapply the auctioneer highlight
+- Clockwise ordering is relative to the local player's position — recompute seat layout whenever `myPlayerIndex` is determined
+
+**Acceptance criteria:**
+- All 5 player nodes are visible and arranged in a circle
+- Local player is always at the bottom
+- Active auctioneer is visually distinct
+- Name, cash, and goat count update in real time on every state update
+
+**Completion note:** Added `playerCircleContainer` and `playerNodePositions` (Map for Task 9 tween). Removed PLAYERS panel from `buildRightPanel`. Added `buildPlayerCircle` that computes ellipse positions (CX=638, CY=center, RX=350, RY=220) with local player at bottom (π/2), others clockwise. Auctioneer node gets gold glow + scale pulse tween. Right panel now shows only YOUR VALUES (full height).
 
 ---
 
-### [x] Guarantee unique favourite goat type per player
+### [x] UX: Prominent "Your Turn to Auction" indicator
 
-**Completed:** Implemented randomized Latin square approach. Each player gets a different #1 goat type. Randomization prevents players from deducing opponents' value sheets from turn order.
+**Description:** When it's your turn to put a goat up for auction, the center of the screen currently shows a generic "Waiting for auction" message. Players miss that it's their turn.
+
+**What to show:**
+- Replace the idle center-screen message with a large, animated "Your Turn!" banner in a distinct color (gold/yellow vs the neutral grey of the waiting state)
+- Include a clear sub-instruction: "Select a goat from your hand to start the auction"
+- Goat cards in your hand should visually "light up" or pulse to indicate they're clickable
+- The banner should pulse gently (alpha tween) to draw the eye without being annoying
 
 **Changes:**
-- Built base Latin square using rotation: each row = `[50,40,30,20,10]` rotated by row index
-- Shuffled rows (which player gets which value set) and columns (which goat type maps to which position)
-- Preserves Latin square property: each goat type receives all 5 values exactly once across players
-- Added test case "each player should have a different #1 goat type" to `valueSheets.test.ts`
-- Added test case "each goat type receives each value exactly once" to verify Latin square property
+- In `GameScene.ts`, detect the condition: `phase === 'playing' && auction === null && currentAuctioneerIndex === myPlayerIndex`
+- Render a distinct "my turn" center panel vs the "waiting" panel
+- Add a pulse tween (scale or alpha) to the banner
+- Update hand card rendering to show a hover/selection affordance on the player's own turn
+
+**Acceptance criteria:**
+- "Your Turn" state is visually unmistakable
+- Instruction text is legible
+- Hand cards have a clear clickable affordance during the player's auction turn
+- Indicator disappears immediately when an auction opens
+
+**Completion note:** `buildWaitingCenter` now takes `isMyTurn` arg; shows a gold "Your Turn!" banner with pulsing alpha tween and sub-instruction when it's the player's turn. Hand panel draws gold glow rings (pulsing tween) behind each card while it's the player's turn and no auction is active.
 
 ---
 
-### [x] Fix bots not bidding on human-auctioned goats
+### [x] UX Controls: Replace bid number input with +1 / +5 / Raise / Clear buttons
 
-**Completed:** Removed `botManager.cancelAll()` from `endAuction()`. It now only lives in `onDispose()`. Bot action callbacks already have stale-state guards (`if (!this.gameState.auction || phase !== 'playing') return`), so they safely no-op if the auction closes before they fire.
+**Description:** The current bid interface uses a raw number input, which is fiddly and awkward for a real-time auction game. Replace it with tactile increment buttons.
+
+**Button set:**
+- **+1** — adds 1 gold to the current bid draft
+- **+5** — adds 5 gold to the current bid draft
+- **Raise** — sets the bid draft to `currentHighestBid + 1` (the minimum to beat the current leader); if no bids yet, sets to 1
+- **✕ Clear** — resets the draft to 0 (only shown when draft > 0)
+- **Bid** (submit) — sends `PlaceBid` with the current draft; disabled when draft ≤ currentHighestBid or draft > player.cash
+
+**Display:**
+- Show draft value prominently: "Your bid: 35 gold"
+- Show current highest bid for reference: "Current high: 30 (Bob)"
+- Grey out +1 / +5 when adding that amount would exceed the player's cash
 
 **Changes:**
-- Removed `this.botManager.cancelAll()` from `endAuction()` method in `GameRoom.ts`
-- Added explanatory comment: "we do NOT call botManager.cancelAll() here because doing so would cancel pending bid timers from bots who haven't acted yet"
-- Kept `cancelAll()` in `onDispose()` for clean room shutdown
-- Verified `executeBotBid` and `executeBotAccept` already guard against stale auction state
+- Replace the number input and "Place Bid" button in `GameScene.ts` with the new button layout (DOM overlay or Phaser interactive objects)
+- Maintain a local `bidDraft: number` state in the scene; reset to 0 when a new auction opens or the player's bid is confirmed
+- Validate and visually disable the submit button when the draft is invalid
+
+**Acceptance criteria:**
+- All buttons render and function correctly
+- Draft display updates immediately on every button press
+- Submit is disabled when draft is invalid (too low or exceeds cash)
+- Raise correctly computes `currentHighestBid + 1`
+- Draft resets cleanly between auctions
+
+**Completion note:** Removed `<input>` DOM overlay; replaced with Phaser buttons (+1, +5, Raise, ✕ Clear). Draft tracked in `bidDraft` field; auto-reset on new auction via `lastAuctionGoatId` diff. Bid button enabled only when `bidDraft > currentHighCash && bidDraft <= myPlayer.cash`. All typecheck clean.
 
 ---
 
-### [x] Shuffle player turn order at game start
+### [x] UX: Score screen shows full breakdown (goats by type + cash)
 
-**Completed:** Implemented Fisher-Yates shuffle after `fillWithBots()`. Updated all affected tests (GameRoom.test.ts) to handle shuffled player order by patching `currentAuctioneerIndex` in test setup and rewriting game-over test to detect human vs bot auctioneers dynamically.
+**Description:** The current end-game score screen shows only a final total score per player. Players have no way to understand *why* they won or lost — which goats they ended up with, how much each type was worth to them, and how much cash contributed. A full breakdown makes the reveal exciting and teaches players what the winning strategy was.
+
+**What to show (per player):**
+- Player name and final total score (existing)
+- **Cash remaining** — raw gold at game end, labeled "Cash: 42 gold"
+- **Goats by type** — a row for each goat type showing: type name, count held, value per goat (from their private value sheet), and subtotal. E.g.: "Silly × 2 @ 50 = 100 pts"
+- **Grand total** breakdown: cash + all goat subtotals = final score (should match the existing score)
+- Reveal each player's value sheet alongside their breakdown so everyone can see the full picture at game end
+
+**Layout suggestion:**
+- A "scorecard" accordion or tab per player: click/tap to expand their breakdown, collapsed by default for opponents
+- Your own card is expanded by default
+- Each goat type row uses the goat's color for a visual type indicator
 
 **Changes:**
-- Added `shufflePlayers<T>()` method to GameRoom using Fisher-Yates algorithm
-- Called `this.gameState.players = this.shufflePlayers(this.gameState.players)` after `fillWithBots()` in `handleStartGame`
-- `currentAuctioneerIndex` remains 0 (now points to random player after shuffle)
-- Updated `setupStartedGame()` test helper to patch `currentAuctioneerIndex` to alice's actual index for deterministic test behavior
-- Rewrote game-over test to loop and detect whether current auctioneer is alice/bob (drive manually) or bot (advance timers)
-- Updated "advances turn after AcceptBid" test to compute expected next index dynamically instead of hardcoding 1
+- The server already sends `valueSheets` and `scores` in the `gameOver` broadcast — also ensure `playerNames` is included (already added in Slice 3)
+- Extend the client's score screen rendering to display the breakdown, computing `goatCount[type] * valueSheet[type]` for each type locally in the client (no server changes needed)
+- Add the cash row and per-type rows for each player
+- Style the scorecard with readable typography; highlight the winner's card
 
----
+**Acceptance criteria:**
+- Each player's scorecard shows: cash, goats by type with count/value/subtotal, and grand total
+- Grand total on the scorecard matches the server-computed score
+- All players' value sheets are visible on the score screen
+- The winner is visually highlighted
 
-### [x] Enable solo play (1 player vs 4 bots)
-
-**Completed:** Removed the 2-player minimum check so users can start a game alone and play vs all bots.
-
-**Changes:**
-- Changed `if (this.gameState.players.length < 2) return;` to `< 1` in `handleStartGame` (GameRoom.ts)
-- Updated test "refuses to start with fewer than 2 players" → "allows single-player start (solo vs bots)" to assert phase becomes 'playing' and player count reaches 5
-
----
-
-### [x] Randomize value sheet assignment (prevent turn-order deduction)
-
-**Completed:** The rotation-based approach was too predictable — players could deduce opponents' sheets from turn order. Switched to randomized Latin square: shuffle both rows (which player gets which value set) and columns (which goat type maps to which position). Players can only deduce "I have Silly at 50, so no one else does" — not "Player 2 has Angry at 50".
-
-**Changes:**
-- Rewrote `generateValueSheets` to build base Latin square, then shuffle rows with `shuffleArray([0,1,2,3,4])`
-- Shuffled columns with second `shuffleArray([0,1,2,3,4])` to randomize goat-type-to-value mapping
-- Added `shuffleArray<T>()` helper function (Fisher-Yates) to valueSheets.ts
-- Preserved all Latin square properties: each player gets all 5 values once, each goat type receives all 5 values once across players
-- All tests still pass (they check properties, not exact assignments)
-
----
-
-## Slice 4: Polished Lobby & Waiting Room
-
-*Stub — expand before implementing.*
-
-- [ ] Waiting room screen between join and game start (shows seated players, bot indicators)
-- [ ] Host-only "Start Game" button (with min player enforcement)
-- [ ] Real-time player list updates in waiting room
-- [ ] Disconnect handling (replace leaver with bot mid-game)
-- [ ] UI test: waiting room flow
-
----
-
-## Slice 5: Art, Animation & Polish
-
-*Stub — expand before implementing.*
-
-- [ ] Goat card art (Silly, Angry, Happy, Hungry — all 4 types)
-- [ ] Idle animations per goat type (ear wiggle, blink, chew)
-- [ ] UI skin: color palette, fonts, backgrounds
-- [ ] Sound effects: bid placed, auction accepted, game end fanfare
-- [ ] Visual feedback for bid accepted/rejected (animation or flash)
-- [ ] Responsive layout (works at common browser window sizes)
+**Completion note:** Added `finalPlayers` (id, name, hand, cash) to `GameOverEvent` type and server broadcast. ScoreScene rewritten with accordion cards (click to expand/collapse); my card expanded by default. Each expanded card shows: cash row, per-type goat rows (count × value = subtotal), grand total. Winner card gold-highlighted.
 
 ---
 
 ## Backlog / Future
 
-- [ ] Game configuration (turn count, starting cash, hand size)
-- [ ] Additional goat types
+- [ ] Game configuration screen (turn count, starting cash, hand size)
 - [ ] Player avatars
 - [ ] Chat or emoji reactions during auctions
 - [ ] Rematch / persistent player names
 - [ ] Mobile layout
+- [ ] Disconnect handling (replace leaver with bot mid-game)
+- [ ] Goat card art and idle animations per type
+- [ ] Sound effects (bid placed, accepted, game end fanfare)

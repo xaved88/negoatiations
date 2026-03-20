@@ -32,17 +32,29 @@ describe('nextAuctioneerIndex', () => {
 });
 
 describe('isGameOver', () => {
-  it('should return false when turns < TURNS_PER_GAME', () => {
-    expect(isGameOver(0)).toBe(false);
-    expect(isGameOver(TURNS_PER_GAME - 1)).toBe(false);
+  it('should return false when fewer than TURNS_PER_GAME full rounds have completed', () => {
+    expect(isGameOver(0, 5)).toBe(false);
+    expect(isGameOver(4, 5)).toBe(false); // 4 auctions with 5 players = 0 full rounds
+    expect(isGameOver(TURNS_PER_GAME * 5 - 1, 5)).toBe(false); // one auction short
   });
 
-  it('should return true when turns >= TURNS_PER_GAME', () => {
-    expect(isGameOver(TURNS_PER_GAME)).toBe(true);
-    expect(isGameOver(TURNS_PER_GAME + 1)).toBe(true);
+  it('should return true when TURNS_PER_GAME full rounds have completed', () => {
+    expect(isGameOver(TURNS_PER_GAME * 5, 5)).toBe(true);
+    expect(isGameOver(TURNS_PER_GAME * 5 + 1, 5)).toBe(true);
   });
 
-  it('should return true at exactly TURNS_PER_GAME', () => {
-    expect(isGameOver(TURNS_PER_GAME)).toBe(true);
+  it('should return true at exactly TURNS_PER_GAME rounds', () => {
+    expect(isGameOver(TURNS_PER_GAME * 5, 5)).toBe(true);
+  });
+
+  it('game is not over after first N auctions when there are 5 players', () => {
+    // 5 auctions = 1 full round; game requires TURNS_PER_GAME rounds so only false if TURNS_PER_GAME > 1
+    expect(isGameOver(5, 5)).toBe(TURNS_PER_GAME <= 1);
+  });
+
+  it('should work correctly with 2 players', () => {
+    expect(isGameOver(0, 2)).toBe(false);
+    expect(isGameOver(1, 2)).toBe(false); // 1 auction, not a full round yet
+    expect(isGameOver(TURNS_PER_GAME * 2, 2)).toBe(true);
   });
 });

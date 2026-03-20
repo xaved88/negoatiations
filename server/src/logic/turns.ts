@@ -7,6 +7,6 @@ export function nextAuctioneerIndex(
   return (current + 1) % playerCount;
 }
 
-export function isGameOver(turnNumber: number): boolean {
-  return turnNumber >= TURNS_PER_GAME;
+export function isGameOver(turnNumber: number, playerCount: number): boolean {
+  return Math.floor(turnNumber / playerCount) >= TURNS_PER_GAME;
 }

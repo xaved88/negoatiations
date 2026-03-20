@@ -359,6 +359,11 @@ describe('GameRoom - game over', () => {
       expect(aliceGameOver).toBeDefined();
       expect(aliceGameOver['valueSheets']).toBeDefined();
       expect(aliceGameOver['scores']).toBeDefined();
+      // playerNames must be present so the score screen can show names instead of session IDs
+      expect(aliceGameOver['playerNames']).toBeDefined();
+      const playerNames = aliceGameOver['playerNames'] as Record<string, string>;
+      expect(playerNames['alice-session']).toBe('Alice');
+      expect(playerNames['bob-session']).toBe('Bob');
     } finally {
       jest.useRealTimers();
     }

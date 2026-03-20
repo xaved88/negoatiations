@@ -329,10 +329,22 @@ describe('NaiveBotStrategy.decideAccept', () => {
     expect(decision.bidderId).toBe('bidder');
   });
 
-  it('waits when no bid meets the threshold', () => {
+  it('holds a mid-range open bid (30–70% of goat value)', () => {
+    // Silly = 10, threshold = 7, reject threshold = 3; bid of 5 is mid-range
     const auction = makeAuction({ bids: [makeBidEntry('bidder', 5)] });
     const decision = strategy.decideAccept(auctioneer, sheet, auction);
-    expect(decision.action).toBe('wait');
+    expect(decision.action).toBe('hold');
+    expect(decision.bidderId).toBe('bidder');
+    expect(decision.delayMs).toBeGreaterThan(0);
+  });
+
+  it('rejects a low-ball open bid (below 30% of goat value)', () => {
+    // Silly = 10, reject threshold = floor(10 * 0.3) = 3; bid of 2 is low-ball
+    const auction = makeAuction({ bids: [makeBidEntry('bidder', 2)] });
+    const decision = strategy.decideAccept(auctioneer, sheet, auction);
+    expect(decision.action).toBe('reject');
+    expect(decision.bidderId).toBe('bidder');
+    expect(decision.delayMs).toBeGreaterThan(0);
   });
 
   it('waits when there are no bids at all', () => {
@@ -365,11 +377,14 @@ describe('NaiveBotStrategy.decideAccept', () => {
     expect(decision.bidderId).toBe('held');
   });
 
-  it('returns a positive delay when accepting', () => {
+  it('returns a positive delay near timer expiry when accepting', () => {
+    // timerEndsAt = now + 30s; expect delay ≈ 27–28.5s (timer - 1.5–3s jitter)
     const auction = makeAuction({ bids: [makeBidEntry('bidder', 10)] });
     const decision = strategy.decideAccept(auctioneer, sheet, auction);
     expect(decision.action).toBe('accept');
     expect(decision.delayMs).toBeGreaterThan(0);
+    // Delay should be close to the remaining timer (at least 24s out of 30s)
+    expect(decision.delayMs).toBeGreaterThan(24_000);
   });
 });
 
