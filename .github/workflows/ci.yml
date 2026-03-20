@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI
 
 on:
   push:
@@ -26,22 +26,3 @@ jobs:
 
     - name: Run unit tests
       run: npm run test:unit
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.ref == 'refs/heads/main'
-
-    steps:
-    - name: Trigger deployment
-      run: |
-        response=$(curl -s -X POST "${{ secrets.RENDER_DEPLOY_URL }}")
-        echo "Deployment response: $response"
-
-        if echo "$response" | jq -e '.deploy.id' > /dev/null; then
-          deploy_id=$(echo "$response" | jq -r '.deploy.id')
-          echo "Deployment triggered successfully with ID: $deploy_id"
-        else
-          echo "Deployment failed - no deploy ID found in response"
-          exit 1
-        fi

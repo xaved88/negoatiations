@@ -11,7 +11,8 @@
     "dev": "concurrently \"npm run dev -w @negoatiations/server\" \"npm run dev -w @negoatiations/client\"",
     "test:unit": "npm run test -w @negoatiations/server",
     "test:ui": "npx playwright test",
-    "typecheck": "tsc --noEmit -p shared/tsconfig.json && tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p client/tsconfig.json"
+    "typecheck": "tsc --noEmit -p shared/tsconfig.json && tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p client/tsconfig.json",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
