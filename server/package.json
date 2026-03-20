@@ -4,6 +4,7 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "ts-node --transpile-only -r tsconfig-paths/register src/index.ts",
+    "start": "tsx src/index.ts",
     "test": "jest --forceExit",
     "test:watch": "jest --watch --forceExit"
   },

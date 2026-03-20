@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: negoatiations
+    runtime: node
+    buildCommand: npm ci && npm run build -w @negoatiations/client && mkdir -p server/public && cp -r client/dist/. server/public/
+    startCommand: npm run start -w @negoatiations/server
+    envVars:
+      - key: NODE_ENV
+        value: production

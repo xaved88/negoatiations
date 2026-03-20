@@ -16,6 +16,7 @@ app.use(express.static('public'));
 gameServer.define('game', GameRoom);
 
 // Start server
-httpServer.listen(SERVER_PORT, () => {
-  console.log(`🎮 Negoatiations server running on http://localhost:${SERVER_PORT}`);
+const port = process.env.PORT ? parseInt(process.env.PORT) : SERVER_PORT;
+httpServer.listen(port, () => {
+  console.log(`🎮 Negoatiations server running on http://localhost:${port}`);
 });

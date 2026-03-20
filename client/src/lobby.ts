@@ -9,7 +9,11 @@ export async function showLobby(
   lobbyDiv.style.display = 'flex';
   containerDiv.style.display = 'none';
 
-  const colyseus = new Client('ws://localhost:2567');
+  const isSecure = window.location.protocol === 'https:';
+  const serverUrl = import.meta.env.DEV
+    ? 'ws://localhost:2567'
+    : `${isSecure ? 'wss' : 'ws'}://${window.location.host}`;
+  const colyseus = new Client(serverUrl);
 
   const playerNameInput = document.getElementById(
     'player-name'
