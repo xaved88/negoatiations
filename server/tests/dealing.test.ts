@@ -23,7 +23,8 @@ describe('dealHands', () => {
   });
 
   it('should distribute goat types evenly', () => {
-    const hands = dealHands(4, 4);
+    // 5 players × 5 goats = 25 total goats; with 5 types this divides evenly (5 of each)
+    const hands = dealHands(5, 5);
     const allGoats = hands.flat();
     const typeCounts: Record<string, number> = {};
     const types = Object.values(GoatType);
@@ -36,9 +37,9 @@ describe('dealHands', () => {
       typeCounts[goat.type]++;
     }
 
-    // With 4 players * 4 goats and 4 types, should be 4 of each
+    // With 5 players * 5 goats and 5 types, should be exactly 5 of each
     for (const type of types) {
-      expect(typeCounts[type]).toBe(4);
+      expect(typeCounts[type]).toBe(5);
     }
   });
 

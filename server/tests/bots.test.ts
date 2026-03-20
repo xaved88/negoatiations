@@ -34,6 +34,7 @@ function makeValueSheet(overrides: Partial<ValueSheet> = {}): ValueSheet {
     [GoatType.Angry]: 7,
     [GoatType.Happy]: 4,
     [GoatType.Hungry]: 1,
+    [GoatType.Grumpy]: 0,
     ...overrides,
   };
 }

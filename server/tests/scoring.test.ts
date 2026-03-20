@@ -31,12 +31,14 @@ describe('computeScores', () => {
       [GoatType.Angry]: 1,
       [GoatType.Happy]: 2,
       [GoatType.Hungry]: 3,
+      [GoatType.Grumpy]: 0,
     },
     p2: {
       [GoatType.Silly]: 1,
       [GoatType.Angry]: 4,
       [GoatType.Happy]: 3,
       [GoatType.Hungry]: 2,
+      [GoatType.Grumpy]: 0,
     },
   };
 
@@ -73,6 +75,7 @@ describe('computeScores', () => {
         [GoatType.Angry]: 2,
         [GoatType.Happy]: 3,
         [GoatType.Hungry]: 4,
+        [GoatType.Grumpy]: 0,
       },
     };
 
@@ -100,6 +103,7 @@ describe('computeScores', () => {
         [GoatType.Angry]: 1,
         [GoatType.Happy]: 4,
         [GoatType.Hungry]: 2,
+        [GoatType.Grumpy]: 0,
       },
     };
 
@@ -128,6 +132,7 @@ describe('computeScores', () => {
         [GoatType.Angry]: 1,
         [GoatType.Happy]: 2,
         [GoatType.Hungry]: 3,
+        [GoatType.Grumpy]: 0,
       },
     };
 

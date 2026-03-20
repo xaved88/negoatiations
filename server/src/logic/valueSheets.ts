@@ -1,44 +1,25 @@
 import { GoatType, ValueSheet } from 'shared/types';
 
+// The set of personal values every player gets, just rotated differently.
+// Values sum to 150 so the total "pie" is the same for everyone.
+//
+// Unique rotation per player index guarantees:
+//  - Each player's #1 goat type is different from every other player's #1 type.
+//  - Latin-square property: across all 5 players, each type receives
+//    each value exactly once (no two players compete for the same "top goat").
+const GOAT_VALUES = [50, 40, 30, 20, 10] as const;
+
 export function generateValueSheets(playerCount: number): ValueSheet[] {
-  const goatTypes = Object.values(GoatType);
+  const goatTypes = Object.values(GoatType); // order matches GoatType enum: Silly, Angry, Happy, Hungry, Grumpy
+  const n = GOAT_VALUES.length; // 5
   const sheets: ValueSheet[] = [];
 
-  // Permutations chosen so the first 4 each have a unique value at every position.
-  // This guarantees that when playerCount <= 4, all players value every goat type differently.
-  // Additional permutations cycle through for larger player counts.
-  const permutations = [
-    [1, 2, 3, 4],
-    [2, 3, 4, 1],
-    [3, 4, 1, 2],
-    [4, 1, 2, 3],
-    [1, 3, 4, 2],
-    [2, 4, 1, 3],
-    [3, 1, 2, 4],
-    [4, 2, 3, 1],
-    [1, 4, 2, 3],
-    [2, 1, 3, 4],
-    [3, 2, 4, 1],
-    [4, 3, 1, 2],
-    [1, 2, 4, 3],
-    [2, 3, 1, 4],
-    [3, 4, 2, 1],
-    [4, 1, 3, 2],
-    [2, 1, 4, 3],
-    [3, 2, 1, 4],
-    [4, 3, 2, 1],
-    [1, 4, 3, 2],
-    [2, 4, 3, 1],
-    [3, 1, 4, 2],
-    [4, 2, 1, 3],
-    [1, 3, 2, 4],
-  ];
-
   for (let i = 0; i < playerCount; i++) {
-    const perm = permutations[i % permutations.length];
     const sheet: ValueSheet = {} as ValueSheet;
-    goatTypes.forEach((type, idx) => {
-      sheet[type] = perm[idx];
+    goatTypes.forEach((type, typeIdx) => {
+      // Rotate the values array left by i positions so each player has a
+      // different goat at rank 1 (and at every other rank).
+      sheet[type] = GOAT_VALUES[(typeIdx + i) % n];
     });
     sheets.push(sheet);
   }

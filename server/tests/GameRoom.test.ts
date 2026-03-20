@@ -202,10 +202,15 @@ describe('GameRoom - auction flow', () => {
     joinRoom(room, bob, 'Bob');
     sendMessage(room, alice, 'StartGame', {});
 
-    const state = getState(room);
-    // Player IDs are the sessionIds
     const aliceId = 'alice-session';
     const bobId = 'bob-session';
+
+    // After StartGame, players are shuffled for production randomness.
+    // Patch the auctioneer index to point to Alice so auction-flow tests
+    // remain deterministic without changing production behaviour.
+    const state = getState(room);
+    const aliceIdx = state.players.findIndex((p) => p.id === aliceId);
+    state.currentAuctioneerIndex = aliceIdx;
 
     return { room, alice, bob, aliceId, bobId };
   }
@@ -279,6 +284,9 @@ describe('GameRoom - auction flow', () => {
 
   it('advances turn after AcceptBid', () => {
     const { room, alice, bob, aliceId, bobId } = setupStartedGame();
+    const aliceIdx = getState(room).currentAuctioneerIndex;
+    const playerCount = getState(room).players.length;
+    const expectedNextIdx = (aliceIdx + 1) % playerCount;
     const goatId = getState(room).players.find((p) => p.id === aliceId)!.hand[0].id;
 
     sendMessage(room, alice, 'PutUpForAuction', { goatId });
@@ -286,7 +294,7 @@ describe('GameRoom - auction flow', () => {
     sendMessage(room, alice, 'AcceptBid', { bidderId: bobId });
 
     expect(getState(room).turnNumber).toBe(1);
-    expect(getState(room).currentAuctioneerIndex).toBe(1); // advanced to Bob
+    expect(getState(room).currentAuctioneerIndex).toBe(expectedNextIdx); // advanced by 1
   });
 });
 
@@ -305,34 +313,39 @@ describe('GameRoom - game over', () => {
       const aliceId = 'alice-session';
       const bobId = 'bob-session';
 
-      // After StartGame, there are 5 players: [alice(0), bob(1), bot(2), bot(3), bot(4)].
-      // Human turns (0 = Alice, 1 = Bob) are driven manually.
-      // Bot turns (2, 3, …) are driven by advancing all fake timers.
-
-      // Turn 0: Alice is auctioneer
-      {
-        const alicePlayer = getState(room).players.find((p) => p.id === aliceId)!;
-        sendMessage(room, alice, 'PutUpForAuction', { goatId: alicePlayer.hand[0].id });
-        sendMessage(room, bob, 'PlaceBid', { bid: { cash: 1, goats: [] } });
-        sendMessage(room, alice, 'AcceptBid', { bidderId: bobId });
-      }
-
-      // Turn 1: Bob is auctioneer
-      {
-        const bobPlayer = getState(room).players.find((p) => p.id === bobId)!;
-        sendMessage(room, bob, 'PutUpForAuction', { goatId: bobPlayer.hand[0].id });
-        sendMessage(room, alice, 'PlaceBid', { bid: { cash: 1, goats: [] } });
-        sendMessage(room, bob, 'AcceptBid', { bidderId: aliceId });
-      }
-
-      // Remaining turns (2 … TURNS_PER_GAME-1) are bot turns.
-      // Drive them by repeatedly flushing the current pending-timer layer until
-      // the game ends.  runOnlyPendingTimers() fires only the timers that exist
-      // at the moment of the call, so timer-chains don't run away; each loop
-      // iteration advances one "generation" of bot actions.
-      let safetyLimit = 200;
+      // After StartGame, players are shuffled so we don't know the turn order
+      // in advance. Drive human turns (Alice / Bob) whenever it's their index;
+      // advance fake timers for bot turns. runOnlyPendingTimers() fires only
+      // the timers pending at the moment of each call, so timer-chains don't
+      // run away; each loop iteration advances one "generation" of bot actions.
+      let safetyLimit = 400;
       while (getState(room).phase === 'playing' && safetyLimit-- > 0) {
-        jest.runOnlyPendingTimers();
+        const state = getState(room);
+
+        // If an auction is already open, advance timers to let bots bid/accept
+        if (state.auction) {
+          jest.runOnlyPendingTimers();
+          continue;
+        }
+
+        // No auction yet — check whether the current auctioneer is a human
+        const auctioneerIdx = state.currentAuctioneerIndex;
+        const auctioneer = state.players[auctioneerIdx];
+
+        if (auctioneer.id === aliceId) {
+          const alicePlayer = state.players.find((p) => p.id === aliceId)!;
+          sendMessage(room, alice, 'PutUpForAuction', { goatId: alicePlayer.hand[0].id });
+          sendMessage(room, bob, 'PlaceBid', { bid: { cash: 1, goats: [] } });
+          sendMessage(room, alice, 'AcceptBid', { bidderId: bobId });
+        } else if (auctioneer.id === bobId) {
+          const bobPlayer = state.players.find((p) => p.id === bobId)!;
+          sendMessage(room, bob, 'PutUpForAuction', { goatId: bobPlayer.hand[0].id });
+          sendMessage(room, alice, 'PlaceBid', { bid: { cash: 1, goats: [] } });
+          sendMessage(room, bob, 'AcceptBid', { bidderId: aliceId });
+        } else {
+          // Bot auctioneer — advance timers to let it put up a goat (and others bid)
+          jest.runOnlyPendingTimers();
+        }
       }
       expect(safetyLimit).toBeGreaterThan(0); // guard against broken loops
 

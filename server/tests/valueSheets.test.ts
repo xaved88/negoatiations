@@ -18,9 +18,9 @@ describe('generateValueSheets', () => {
     }
   });
 
-  it('should use values 1-4 in each sheet', () => {
-    const sheets = generateValueSheets(3);
-    const expectedValues = [1, 2, 3, 4];
+  it('should use values {10, 20, 30, 40, 50} in each sheet', () => {
+    const sheets = generateValueSheets(5);
+    const expectedValues = [10, 20, 30, 40, 50];
 
     for (const sheet of sheets) {
       const values = Object.values(sheet).sort((a, b) => a - b);
@@ -33,29 +33,54 @@ describe('generateValueSheets', () => {
     const sheet1Values = Object.values(sheets[0]);
     const sheet2Values = Object.values(sheets[1]);
 
-    // At least one value should differ
+    // At least one value should differ between any two adjacent players
     const allEqual = sheet1Values.every((v, idx) => v === sheet2Values[idx]);
     expect(allEqual).toBe(false);
   });
 
-  it('should handle more players than permutations by cycling', () => {
-    const sheets = generateValueSheets(30);
-    expect(sheets).toHaveLength(30);
+  it('each player should have a different #1 goat type (unique top value per player)', () => {
+    const sheets = generateValueSheets(5);
 
-    // All sheets should still be valid
+    // Find each player's top-valued goat type
+    const topTypes = sheets.map((sheet) => {
+      const entries = Object.entries(sheet) as [GoatType, number][];
+      return entries.reduce((best, cur) => (cur[1] > best[1] ? cur : best))[0];
+    });
+
+    // All 5 top types must be different
+    const unique = new Set(topTypes);
+    expect(unique.size).toBe(5);
+  });
+
+  it('each goat type receives each value exactly once across 5 players (Latin square)', () => {
+    const sheets = generateValueSheets(5);
     const types = Object.values(GoatType);
-    for (const sheet of sheets) {
-      const values = Object.values(sheet).sort((a, b) => a - b);
-      expect(values).toEqual([1, 2, 3, 4]);
+    const expectedValues = new Set([10, 20, 30, 40, 50]);
+
+    for (const type of types) {
+      const valuesForType = new Set(sheets.map((s) => s[type]));
+      expect(valuesForType).toEqual(expectedValues);
     }
   });
 
-  it('should create 4 players with different goat valuations', () => {
-    const sheets = generateValueSheets(4);
-    const sillyValues = sheets.map((s) => s[GoatType.Silly]);
-    const uniqueSillyValues = new Set(sillyValues);
+  it('should work for 2 players with a partial rotation', () => {
+    const sheets = generateValueSheets(2);
+    const expectedValues = [10, 20, 30, 40, 50];
 
-    // All 4 players should value Silly goats differently
-    expect(uniqueSillyValues.size).toBe(4);
+    for (const sheet of sheets) {
+      const values = Object.values(sheet).sort((a, b) => a - b);
+      expect(values).toEqual(expectedValues);
+    }
+  });
+
+  it('should handle more players than goat types by continuing rotation', () => {
+    const sheets = generateValueSheets(10);
+    expect(sheets).toHaveLength(10);
+
+    const expectedValues = [10, 20, 30, 40, 50];
+    for (const sheet of sheets) {
+      const values = Object.values(sheet).sort((a, b) => a - b);
+      expect(values).toEqual(expectedValues);
+    }
   });
 });

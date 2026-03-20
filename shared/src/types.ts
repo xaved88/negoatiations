@@ -3,6 +3,7 @@ export enum GoatType {
   Angry = 'Angry',
   Happy = 'Happy',
   Hungry = 'Hungry',
+  Grumpy = 'Grumpy',
 }
 
 export interface Goat {

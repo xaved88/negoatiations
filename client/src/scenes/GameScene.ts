@@ -8,6 +8,7 @@ const GOAT_COLORS: Record<GoatType, number> = {
   [GoatType.Angry]: 0xFF4444,
   [GoatType.Happy]: 0x44FF44,
   [GoatType.Hungry]: 0x4444FF,
+  [GoatType.Grumpy]: 0xAA44AA,
 };
 
 export class GameScene extends Phaser.Scene {

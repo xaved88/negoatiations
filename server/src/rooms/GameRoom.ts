@@ -152,6 +152,9 @@ export class GameRoom extends Room {
     // 1. Fill empty seats with bots so every game has MAX_PLAYERS participants
     this.fillWithBots();
 
+    // 1b. Shuffle the player order so turn order is randomised each game
+    this.gameState.players = this.shufflePlayers(this.gameState.players);
+
     // 2. Deal hands for ALL players (humans + bots)
     const hands = dealHands(this.gameState.players.length, GOATS_PER_PLAYER);
     for (let i = 0; i < this.gameState.players.length; i++) {
@@ -433,8 +436,11 @@ export class GameRoom extends Room {
    * Call this after the exchange (if any) has already been applied to player states.
    */
   private endAuction() {
-    // Cancel all pending bot timers tied to the auction that just ended
-    this.botManager.cancelAll();
+    // NOTE: we do NOT call botManager.cancelAll() here because doing so would
+    // cancel pending bid timers from bots who haven't acted yet on the current
+    // auction. Instead, each bot action callback re-checks phase/auction guards
+    // and silently no-ops if the auction is already over.
+    // cancelAll() is reserved for onDispose() only.
 
     this.gameState.auction = null;
     this.gameState.turnNumber++;
@@ -488,6 +494,19 @@ export class GameRoom extends Room {
       this.gameState.players.push(botPlayer);
       botNameIdx++;
     }
+  }
+
+  /**
+   * Fisher-Yates shuffle — returns a new array with elements in random order.
+   * Used to randomise the player turn order at game start.
+   */
+  private shufflePlayers<T>(arr: T[]): T[] {
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
   }
 
   // ---------------------------------------------------------------------------
